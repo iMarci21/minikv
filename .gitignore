@@ -55,6 +55,16 @@ dkms.conf
 *.dwo
 
 # Agent rules and files
-AGENTS.md
-GEMINI.md
-CLAUDE.md
+skills/
+#AGENT.md
+#GEMINI.md
+#CLAUDE.md
+
+# Format rules
+#.clang-format.yaml
+
+# The final build file
+minikv
+
+# Build output (release and sanitizer object dirs + binaries)
+/build/

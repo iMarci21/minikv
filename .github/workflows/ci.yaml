@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format (pinned, must match CLANG_FORMAT_VERSION in Makefile)
+        run: pipx install clang-format==22.1.8
+      - name: Check formatting
+        run: make format-check
+
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y redis-tools clang
+
+      - name: Build
+        run: make release
+
+      - name: Integration tests
+        run: make test
+
+      - name: Build with ASan + UBSan
+        run: make sanitize
+
+      - name: Integration tests (sanitized)
+        run: make test-sanitize
