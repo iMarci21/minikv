@@ -30,11 +30,27 @@ rules derived from it live in [`AGENTS.md`](../AGENTS.md).
 | `wal`   | Record encoding, buffered append, flush/fsync, replay.       | (nothing)        |
 | `cmd`   | Command table, argument validation, WAL-then-db, replies.    | `proto` `db` `wal` |
 | `net`   | Sockets, epoll loop, client buffers, calls proto + cmd.      | `proto` `cmd`    |
-| `main`  | Args, signals, wiring, replay at startup, clean shutdown.    | everything       |
+| `main`  | Signals, wiring, replay at startup, clean shutdown.          | everything       |
+| `config`| Command-line parsing into `struct config`. Pure.             | (nothing); used only by `main` |
+| `log`   | Timestamped one-line logging to stderr.                      | (nothing); used by all but `proto` |
 
 `db` and `wal` never know about each other. **Replay avoids a cycle via a callback:**
 `wal_replay(path, apply_fn, ctx)` decodes records and hands each to `apply_fn`;
 `main` passes a `cmd` function that applies the record to the db *without* logging it again.
+
+## Startup and shutdown order (`main.c`)
+
+1. `config_parse`: usage errors exit with code 2 before anything is started.
+2. Signals: `SIGPIPE` ignored; `SIGINT`/`SIGTERM` set a flag and stay **blocked**
+   except while waiting (`sigsuspend` now, `epoll_pwait` from step 3 on), which unblocks
+   them atomically. Blocking them before any thread exists means the fsync thread
+   inherits the mask, so they are always delivered to the main thread.
+3. `db_create` → 4. `wal_open` + replay → 5. `cmd_create` → 6. `net_create` (bind/listen).
+   Replay happens before `bind`, so clients never see a partially loaded db.
+7. Run until a stop signal.
+8. Tear down in exact reverse order through a single cleanup path.
+
+Exit codes: `0` clean shutdown or `--help`, `1` runtime/startup failure, `2` usage error.
 
 ## Expiry: absolute timestamps
 
@@ -129,3 +145,21 @@ payload:= op u8 | op-specific fields  (keys/values as len u32 + bytes, deadlines
 
 All integers little-endian. `crc32c` covers the payload. Replay stops at the first
 record that is short or fails its checksum, truncates the file there, and logs a warning.
+
+## Roadmap
+
+One module per step, each implemented properly and tested on its own, in an order where
+every step also adds something that can be run and tested from the outside.
+
+| # | Step | Depends on | What works afterwards | Tests added | Status |
+|---|---|---|---|---|---|
+| 1 | `main` skeleton + `log` + `config` | nothing | Process starts, parses args, shuts down cleanly on signals | `lifecycle.sh` (in CI) | done |
+| 2 | `proto`: RESP parser + reply serializer | nothing (pure) | Correct parsing of partial, pipelined and malformed input | Unit tests (small C test runner, no framework), later a fuzz harness | |
+| 3 | `net` + a tiny `cmd` (`PING`/`ECHO`) | `proto` | `redis-cli ping` → `PONG` | First integration tests: pipelining, split packets, disconnects, connection limits | |
+| 4 | `db` hash table + `cmd` gains `GET`/`SET`/`DEL`/`STRLEN` | `cmd` | In-memory KV store | Hash table unit tests (binary keys, resizing) + integration | |
+| 5 | Incremental rehashing in `db` | `db` | Large datasets resize without pauses | Unit tests (operations correct during a rehash) | |
+| 6 | Expiry: `EXPIRE`/`TTL`/`SET EX`, absolute deadlines, periodic cleanup | `db`, `net` | Keys expire | Integration | |
+| 7 | `wal`: record format, replay, fsync policies, fsync thread | `cmd` | Data survives restarts; full integration suite re-enabled in CI | Unit (encoding, corrupt-tail replay) + restart tests | |
+| 8+ | Snapshots / log rewrite, B+ tree | | Long-term goals | | |
+
+Deviations from this order are discussed first and recorded here.

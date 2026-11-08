@@ -9,8 +9,9 @@ RESP protocol, in-memory hash table, append-only-log persistence.
 |---------------------------------|----------------------|-------------------------|
 | Build (release)                 | `make`               | `build/release/minikv`  |
 | Build with ASan + UBSan         | `make sanitize`      | `build/sanitize/minikv` |
-| Integration tests (release)     | `make test`          |                         |
-| Integration tests (sanitized)   | `make test-sanitize` |                         |
+| All tests (release)             | `make test`          |                         |
+| All tests (sanitized)           | `make test-sanitize` |                         |
+| Only lifecycle / integration    | `make test-lifecycle`, `make test-integration` (+ `-sanitize`) | |
 | Format in place                 | `make format`        |                         |
 | Check formatting (CI)           | `make format-check`  |                         |
 | Clean                           | `make clean`         |                         |
@@ -29,7 +30,9 @@ builds use separate object directories, so switching between them never needs `m
 
 ## Project Layout and Module Boundaries
 
-- `src/main.c`   : argument parsing, signal setup, startup/shutdown. No logic.
+- `src/main.c`   : signal setup, startup/shutdown order, wiring. No logic.
+- `src/config.c` : command-line parsing. Pure (no I/O, no globals, never exits).
+- `src/log.c`    : `log_info`/`log_warn`/`log_error`, one line per call to stderr.
 - `src/net.c`    : sockets, epoll loop, per-connection read/write buffers.
 - `src/proto.c`  : RESP parser and reply serializer. **Pure functions: no I/O, no
                    syscalls, no globals.** It takes bytes and returns a parse result,
@@ -39,13 +42,21 @@ builds use separate object directories, so switching between them never needs `m
 - `src/db.c`     : hash table and expiry. Knows nothing about sockets, RESP, or the WAL.
 - `src/wal.c`    : append-only log, replay, fsync policy. Knows nothing about sockets,
                    RESP, or the db.
-- `tests/`       : integration tests and fuzz harnesses.
+- `tests/`       : `lifecycle.sh` (args, signals, exit codes), `integration.sh`
+                   (redis-cli end-to-end), later unit tests and fuzz harnesses.
 
 Allowed includes: `net -> {proto, cmd}`, `cmd -> {proto, db, wal}`. `proto`, `db` and
-`wal` include no other project module. WAL replay uses a callback
+`wal` include no other project module. `log` may be included by every module except
+`proto`; `config` only by `main`. WAL replay uses a callback
 (`wal_replay(path, apply_fn, ctx)`) wired up in `main.c`, so there is no `wal -> cmd`
 or `wal -> db` dependency. Each module exposes a small header with opaque structs.
 See [`docs/architecture.md`](docs/architecture.md) for the rationale.
+
+## Roadmap
+
+Work follows the step order in the Roadmap section of `docs/architecture.md`. Do not
+start a later step, or pull in parts of one, without discussing it first. Update the
+Status column when a step is done.
 
 ## Memory & Safety
 
