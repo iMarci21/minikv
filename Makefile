@@ -1,8 +1,6 @@
 CC ?= gcc
 
-# Flags the project depends on. Always applied, even if CFLAGS is overridden.
 REQUIRED_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -D_GNU_SOURCE
-# Tunable flags. Override freely: `make CFLAGS="-O0 -g3"`.
 CFLAGS ?= -O2 -g
 SANITIZE_FLAGS := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
                   -fno-omit-frame-pointer
@@ -15,11 +13,10 @@ CLANG_FORMAT_VERSION := 22.1.8
 
 SRC := $(wildcard src/*.c)
 HDR := $(wildcard src/*.h)
-# Only files that exist; avoids passing a literal "src/*.h" when there are no headers yet.
+# Only files that exist
 FORMAT_FILES := $(SRC) $(HDR) $(wildcard tests/*.c tests/*/*.c tests/*.h tests/*/*.h)
 
-# Each build mode gets its own object directory, so release and sanitizer objects
-# can never be mixed and switching modes needs no `make clean`.
+# Each build mode gets its own obj directory
 RELEASE_DIR := build/release
 SANITIZE_DIR := build/sanitize
 RELEASE_OBJ := $(SRC:src/%.c=$(RELEASE_DIR)/%.o)
@@ -41,8 +38,7 @@ $(RELEASE_BIN): $(RELEASE_OBJ)
 $(SANITIZE_BIN): $(SANITIZE_OBJ)
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# -MMD -MP emit .d files listing each object's header dependencies (included below),
-# so editing a header rebuilds every object that includes it.
+
 $(RELEASE_DIR)/%.o: src/%.c | $(RELEASE_DIR)
 	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
