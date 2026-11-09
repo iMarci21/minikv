@@ -68,8 +68,8 @@ static int setup_signals(sigset_t *wait_mask)
     return 0;
 }
 
-/* 
- * Returns the name of the given signal as string for 
+/*
+ * Returns the name of the given signal as string for
  * SIGINT and SIGTERM. Otherwise returns "unknown signal".
  */
 static const char *stop_signal_name(int sig)
