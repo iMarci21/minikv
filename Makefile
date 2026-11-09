@@ -16,7 +16,7 @@ HDR := $(wildcard src/*.h)
 # Only files that exist
 FORMAT_FILES := $(SRC) $(HDR) $(wildcard tests/*.c tests/*/*.c tests/*.h tests/*/*.h)
 
-# Each build mode gets its own obj directory
+# Each build mode gets an obj directory
 RELEASE_DIR := build/release
 SANITIZE_DIR := build/sanitize
 RELEASE_OBJ := $(SRC:src/%.c=$(RELEASE_DIR)/%.o)
@@ -24,7 +24,9 @@ SANITIZE_OBJ := $(SRC:src/%.c=$(SANITIZE_DIR)/%.o)
 RELEASE_BIN := $(RELEASE_DIR)/minikv
 SANITIZE_BIN := $(SANITIZE_DIR)/minikv
 
-.PHONY: all release sanitize test test-sanitize format format-check clean
+.PHONY: all release sanitize format format-check clean \
+        test test-lifecycle test-integration \
+        test-sanitize test-lifecycle-sanitize test-integration-sanitize
 
 all: release
 
@@ -48,13 +50,24 @@ $(SANITIZE_DIR)/%.o: src/%.c | $(SANITIZE_DIR)
 $(RELEASE_DIR) $(SANITIZE_DIR):
 	mkdir -p $@
 
-test: $(RELEASE_BIN)
+SANITIZER_ENV := ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
+                 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+
+test: test-lifecycle test-integration
+
+test-lifecycle: $(RELEASE_BIN)
+	./tests/lifecycle.sh $(RELEASE_BIN)
+
+test-integration: $(RELEASE_BIN)
 	./tests/integration.sh $(RELEASE_BIN)
 
-test-sanitize: $(SANITIZE_BIN)
-	ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
-	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-	./tests/integration.sh $(SANITIZE_BIN)
+test-sanitize: test-lifecycle-sanitize test-integration-sanitize
+
+test-lifecycle-sanitize: $(SANITIZE_BIN)
+	$(SANITIZER_ENV) ./tests/lifecycle.sh $(SANITIZE_BIN)
+
+test-integration-sanitize: $(SANITIZE_BIN)
+	$(SANITIZER_ENV) ./tests/integration.sh $(SANITIZE_BIN)
 
 format:
 	@$(CLANG_FORMAT) --version | grep -q " $(CLANG_FORMAT_VERSION)" || \
