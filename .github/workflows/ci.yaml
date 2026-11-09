@@ -39,14 +39,20 @@ jobs:
       - name: Build
         run: make release
 
-      # Enable once actual server logic is implemented!
+      - name: Lifecycle tests
+        run: make test-lifecycle
+
+      # Enable Integration tests again if server answers get/set/ping
       - name: Integration tests
         if: false
-        run: make test
+        run: make test-integration
 
       - name: Build with ASan + UBSan
         run: make sanitize
 
+      - name: Lifecycle tests (sanitized)
+        run: make test-lifecycle-sanitize
+
       - name: Integration tests (sanitized)
         if: false
-        run: make test-sanitize
+        run: make test-integration-sanitize

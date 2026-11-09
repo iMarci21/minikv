@@ -11,8 +11,7 @@ SERVER_PID=""
 FAILED=0
 
 start_server() {
-    # Server takes port as first arg
-    (cd "$WORKDIR" && exec "$BIN" "$PORT") >>"$LOG" 2>&1 &
+    (cd "$WORKDIR" && exec "$BIN" --port "$PORT") >>"$LOG" 2>&1 &
     SERVER_PID=$!
     for _ in $(seq 1 50); do
         if "${CLI[@]}" ping >/dev/null 2>&1; then return 0; fi
