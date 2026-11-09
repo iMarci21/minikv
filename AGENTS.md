@@ -138,6 +138,12 @@ Status column when a step is done.
 - Avoid macros that hide control flow. Avoid VLAs.
 - Comments explain *why*, not *what*. Document every non-obvious invariant.
 
+## Comments
+- Keep comments as natural as possible to describe methods, functions or more complex structures.
+- Existing comments shall not be changed, as they might have been subject to user input.
+- Existing comments CAN be modified if the underlying logic of the function it refers to changed  aswell. It's imperative to keep the style the same, even when adding onto the existing comment or rewriting it the reflect the new logic.
+
+
 ## Testing
 
 - Every new command or protocol feature comes with an integration test in
