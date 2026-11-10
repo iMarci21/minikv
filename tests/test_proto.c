@@ -1,3 +1,4 @@
+#include "cmd.h"
 #include "proto.h"
 
 #include <stdint.h>
@@ -26,6 +27,7 @@ static void test_simple_commands(void)
 {
     const char *ping = "*1\r\n$4\r\nPING\r\n";
     const char *set = "*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
+    const char *inl = "  PING   hello\tworld  \r\n";
     struct proto_cmd cmd;
     size_t consumed = 0;
     char err[128];
@@ -45,7 +47,15 @@ static void test_simple_commands(void)
     CHECK(str_eq(cmd.argv[2], "bar"));
     proto_cmd_reset(&cmd);
 
-    printf("ok:   simple commands (PING, SET)\n");
+    CHECK(proto_parse(inl, strlen(inl), &cmd, &consumed, err, sizeof err) == PROTO_OK);
+    CHECK(consumed == strlen(inl));
+    CHECK(cmd.argc == 3);
+    CHECK(str_eq(cmd.argv[0], "PING"));
+    CHECK(str_eq(cmd.argv[1], "hello"));
+    CHECK(str_eq(cmd.argv[2], "world"));
+    proto_cmd_reset(&cmd);
+
+    printf("ok:   simple and inline commands (PING, SET, inline)\n");
 }
 
 static void test_empty_and_binary_bulk(void)
@@ -175,8 +185,12 @@ static void test_many_args_and_large_bulk(void)
 static void test_malformed_inputs(void)
 {
     static const char *const bad[] = {
-        "PING\r\n",                        /* inline command (not an array) */
-        "+OK\r\n",                         /* simple string, not an array */
+        "\r\n",                            /* empty inline command */
+        "   \t  \r\n",                     /* whitespace-only inline command */
+        "+OK\r\n",                         /* simple string reply, not a command */
+        "-ERR\r\n",                        /* error reply, not a command */
+        ":1\r\n",                          /* integer reply, not a command */
+        "$4\r\nPING\r\n",                  /* bare bulk string without array */
         "*\r\n",                           /* empty array count */
         "*0\r\n",                          /* zero args */
         "*-1\r\n",                         /* negative array count */
@@ -287,6 +301,58 @@ static void test_reply_serializers(void)
     printf("ok:   reply serializers (simple, error, int, null, bulk)\n");
 }
 
+static void run_one_cmd(struct cmd *c, const char *raw, size_t raw_len, struct proto_buf *out)
+{
+    struct proto_cmd req;
+    size_t consumed = 0;
+
+    proto_buf_clear(out);
+    CHECK(proto_parse(raw, raw_len, &req, &consumed, NULL, 0) == PROTO_OK);
+    CHECK(consumed == raw_len);
+    CHECK(cmd_exec(c, &req, out) == 0);
+    proto_cmd_reset(&req);
+}
+
+static void test_cmd_ping_and_echo(void)
+{
+    struct cmd *c = cmd_create();
+    struct proto_buf out;
+
+    CHECK(c != NULL);
+    proto_buf_init(&out);
+
+    /* PING (case-insensitive, 0 args) -> +PONG */
+    run_one_cmd(c, "*1\r\n$4\r\npInG\r\n", 14U, &out);
+    CHECK(out.len == 7U && memcmp(out.data, "+PONG\r\n", 7U) == 0);
+
+    /* PING with 1 arg -> bulk reply */
+    run_one_cmd(c, "*2\r\n$4\r\nPING\r\n$5\r\nhello\r\n", 25U, &out);
+    CHECK(out.len == 11U && memcmp(out.data, "$5\r\nhello\r\n", 11U) == 0);
+
+    /* PING with 2 args -> -ERR wrong number of arguments */
+    run_one_cmd(c, "*3\r\n$4\r\nPING\r\n$1\r\na\r\n$1\r\nb\r\n", 28U, &out);
+    CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
+
+    /* ECHO with binary payload containing NUL */
+    {
+        static const char echo_bin[] = "*2\r\n$4\r\necho\r\n$3\r\nx\0y\r\n";
+        run_one_cmd(c, echo_bin, sizeof echo_bin - 1U, &out);
+        CHECK(out.len == 9U && memcmp(out.data, "$3\r\nx\0y\r\n", 9U) == 0);
+    }
+
+    /* ECHO with wrong arity */
+    run_one_cmd(c, "*1\r\n$4\r\nECHO\r\n", 14U, &out);
+    CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
+
+    /* Unknown command */
+    run_one_cmd(c, "*1\r\n$4\r\nNOPE\r\n", 14U, &out);
+    CHECK(out.len == 22U && memcmp(out.data, "-ERR unknown command\r\n", 22U) == 0);
+
+    proto_buf_destroy(&out);
+    cmd_destroy(c);
+    printf("ok:   cmd_exec (PING, ECHO, case-insensitive, arity and unknown command errors)\n");
+}
+
 int main(void)
 {
     test_simple_commands();
@@ -297,6 +363,7 @@ int main(void)
     test_malformed_inputs();
     test_proto_buf();
     test_reply_serializers();
+    test_cmd_ping_and_echo();
 
     if (g_failed) {
         fprintf(stderr, "SOME UNIT TESTS FAILED\n");

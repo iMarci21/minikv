@@ -27,8 +27,8 @@ RELEASE_TEST_PROTO := $(RELEASE_DIR)/test_proto
 SANITIZE_TEST_PROTO := $(SANITIZE_DIR)/test_proto
 
 .PHONY: all release sanitize format format-check clean \
-        test test-unit test-lifecycle test-integration \
-        test-sanitize test-unit-sanitize test-lifecycle-sanitize test-integration-sanitize
+        test test-unit test-lifecycle test-net test-integration \
+        test-sanitize test-unit-sanitize test-lifecycle-sanitize test-net-sanitize test-integration-sanitize
 
 all: release
 
@@ -42,10 +42,10 @@ $(RELEASE_BIN): $(RELEASE_OBJ)
 $(SANITIZE_BIN): $(SANITIZE_OBJ)
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(RELEASE_TEST_PROTO): $(RELEASE_DIR)/test_proto.o $(RELEASE_DIR)/proto.o
+$(RELEASE_TEST_PROTO): $(RELEASE_DIR)/test_proto.o $(RELEASE_DIR)/proto.o $(RELEASE_DIR)/cmd.o
 	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(SANITIZE_TEST_PROTO): $(SANITIZE_DIR)/test_proto.o $(SANITIZE_DIR)/proto.o
+$(SANITIZE_TEST_PROTO): $(SANITIZE_DIR)/test_proto.o $(SANITIZE_DIR)/proto.o $(SANITIZE_DIR)/cmd.o
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(RELEASE_DIR)/%.o: src/%.c | $(RELEASE_DIR)
@@ -66,7 +66,7 @@ $(RELEASE_DIR) $(SANITIZE_DIR):
 SANITIZER_ENV := ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
                  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
 
-test: test-unit test-lifecycle test-integration
+test: test-unit test-lifecycle test-net test-integration
 
 test-unit: $(RELEASE_TEST_PROTO)
 	./$(RELEASE_TEST_PROTO)
@@ -74,16 +74,22 @@ test-unit: $(RELEASE_TEST_PROTO)
 test-lifecycle: $(RELEASE_BIN)
 	./tests/lifecycle.sh $(RELEASE_BIN)
 
+test-net: $(RELEASE_BIN)
+	./tests/net.sh $(RELEASE_BIN)
+
 test-integration: $(RELEASE_BIN)
 	./tests/integration.sh $(RELEASE_BIN)
 
-test-sanitize: test-unit-sanitize test-lifecycle-sanitize test-integration-sanitize
+test-sanitize: test-unit-sanitize test-lifecycle-sanitize test-net-sanitize test-integration-sanitize
 
 test-unit-sanitize: $(SANITIZE_TEST_PROTO)
 	$(SANITIZER_ENV) ./$(SANITIZE_TEST_PROTO)
 
 test-lifecycle-sanitize: $(SANITIZE_BIN)
 	$(SANITIZER_ENV) ./tests/lifecycle.sh $(SANITIZE_BIN)
+
+test-net-sanitize: $(SANITIZE_BIN)
+	$(SANITIZER_ENV) ./tests/net.sh $(SANITIZE_BIN)
 
 test-integration-sanitize: $(SANITIZE_BIN)
 	$(SANITIZER_ENV) ./tests/integration.sh $(SANITIZE_BIN)
