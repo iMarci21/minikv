@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define PROTO_BUF_INIT_CAP 64U
+#define PROTO_MAX_INLINE_LINE 65536U
 
 __attribute__((format(printf, 3, 4))) static void set_err(char *err, size_t err_len,
                                                           const char *fmt, ...)
@@ -98,6 +99,100 @@ void proto_cmd_reset(struct proto_cmd *cmd)
     memset(cmd, 0, sizeof *cmd);
 }
 
+static int init_cmd_argv(struct proto_cmd *cmd, size_t count, char *err, size_t err_len)
+{
+    struct proto_str *argv;
+
+    if (count <= PROTO_INLINE_ARGS) {
+        argv = cmd->inline_argv;
+    } else {
+        argv = calloc(count, sizeof *argv);
+        if (argv == NULL) {
+            set_err(err, err_len, "out of memory");
+            return -1;
+        }
+    }
+    cmd->argv = argv;
+    cmd->argc = count;
+    return 0;
+}
+
+/*
+ * Parses a space-separated inline command line (e.g. "PING\r\n" or "ECHO hi\r\n")
+ * used by redis-benchmark (PING_INLINE) and manual nc/telnet sessions.
+ */
+static enum proto_result parse_inline(const char *buf, size_t len, struct proto_cmd *cmd,
+                                      size_t *consumed, char *err, size_t err_len)
+{
+    size_t pos = 0;
+    size_t line_start = 0;
+    size_t line_end = 0;
+    enum proto_result r;
+    size_t count = 0;
+    size_t i;
+    size_t idx = 0;
+
+    r = read_line(buf, len, &pos, &line_start, &line_end, err, err_len);
+    if (r == PROTO_INCOMPLETE) {
+        if (len > PROTO_MAX_INLINE_LINE) {
+            set_err(err, err_len, "inline command line too long");
+            return PROTO_ERROR;
+        }
+        return PROTO_INCOMPLETE;
+    }
+    if (r != PROTO_OK) {
+        return r;
+    }
+    if (line_end - line_start > PROTO_MAX_INLINE_LINE) {
+        set_err(err, err_len, "inline command line too long");
+        return PROTO_ERROR;
+    }
+
+    i = line_start;
+    while (i < line_end) {
+        while (i < line_end && (buf[i] == ' ' || buf[i] == '\t')) {
+            i++;
+        }
+        if (i >= line_end) {
+            break;
+        }
+        count++;
+        while (i < line_end && buf[i] != ' ' && buf[i] != '\t') {
+            i++;
+        }
+    }
+
+    if (count == 0 || count > PROTO_MAX_ARGS) {
+        set_err(err, err_len, "invalid inline command");
+        return PROTO_ERROR;
+    }
+    if (init_cmd_argv(cmd, count, err, err_len) != 0) {
+        return PROTO_ERROR;
+    }
+
+    i = line_start;
+    while (i < line_end) {
+        size_t tok_start;
+
+        while (i < line_end && (buf[i] == ' ' || buf[i] == '\t')) {
+            i++;
+        }
+        if (i >= line_end) {
+            break;
+        }
+        tok_start = i;
+        while (i < line_end && buf[i] != ' ' && buf[i] != '\t') {
+            i++;
+        }
+        cmd->argv[idx].data = buf + tok_start;
+        cmd->argv[idx].len = i - tok_start;
+        idx++;
+    }
+
+    *consumed = pos;
+    return PROTO_OK;
+}
+
 enum proto_result proto_parse(const char *buf, size_t len, struct proto_cmd *cmd, size_t *consumed,
                               char *err, size_t err_len)
 {
@@ -106,7 +201,6 @@ enum proto_result proto_parse(const char *buf, size_t len, struct proto_cmd *cmd
     size_t line_end = 0;
     enum proto_result r;
     uint64_t count = 0;
-    struct proto_str *argv = NULL;
 
     memset(cmd, 0, sizeof *cmd);
     *consumed = 0;
@@ -118,10 +212,13 @@ enum proto_result proto_parse(const char *buf, size_t len, struct proto_cmd *cmd
         return PROTO_INCOMPLETE;
     }
 
-    /* Requests must be RESP arrays: "*<count>\r\n..." */
+    /* Non-array lines that start with a valid command byte are parsed as inline commands. */
     if (buf[0] != '*') {
-        set_err(err, err_len, "expected '*' at start of command");
-        return PROTO_ERROR;
+        if (buf[0] == '+' || buf[0] == '-' || buf[0] == ':' || buf[0] == '$') {
+            set_err(err, err_len, "expected '*' at start of command");
+            return PROTO_ERROR;
+        }
+        return parse_inline(buf, len, cmd, consumed, err, err_len);
     }
     pos = 1;
 
@@ -134,17 +231,9 @@ enum proto_result proto_parse(const char *buf, size_t len, struct proto_cmd *cmd
         return PROTO_ERROR;
     }
 
-    if (count <= PROTO_INLINE_ARGS) {
-        argv = cmd->inline_argv;
-    } else {
-        argv = calloc((size_t)count, sizeof *argv);
-        if (argv == NULL) {
-            set_err(err, err_len, "out of memory");
-            return PROTO_ERROR;
-        }
+    if (init_cmd_argv(cmd, (size_t)count, err, err_len) != 0) {
+        return PROTO_ERROR;
     }
-    cmd->argv = argv;
-    cmd->argc = (size_t)count;
 
     for (size_t i = 0; i < (size_t)count; i++) {
         uint64_t bulk_len = 0;
@@ -190,8 +279,8 @@ enum proto_result proto_parse(const char *buf, size_t len, struct proto_cmd *cmd
             return PROTO_ERROR;
         }
 
-        argv[i].data = buf + pos;
-        argv[i].len = b_len;
+        cmd->argv[i].data = buf + pos;
+        cmd->argv[i].len = b_len;
         pos += b_len + 2U;
     }
 
@@ -295,19 +384,16 @@ static int reply_line(struct proto_buf *b, char prefix, const char *s)
     return 0;
 }
 
-/*   proto_reply_simple(b, "OK")       -> "+OK\r\n" */
 int proto_reply_simple(struct proto_buf *b, const char *s)
 {
     return reply_line(b, '+', s);
 }
 
-/* proto_reply_error(b, "ERR ...")   -> "-ERR ...\r\n" */
 int proto_reply_error(struct proto_buf *b, const char *msg)
 {
     return reply_line(b, '-', msg);
 }
 
-/* proto_reply_int(b, -42)           -> ":-42\r\n" */
 int proto_reply_int(struct proto_buf *b, int64_t v)
 {
     char tmp[32];
@@ -319,13 +405,11 @@ int proto_reply_int(struct proto_buf *b, int64_t v)
     return proto_buf_append(b, tmp, (size_t)n);
 }
 
-/* proto_reply_null(b)               -> "$-1\r\n" */
 int proto_reply_null(struct proto_buf *b)
 {
     return proto_buf_append(b, "$-1\r\n", 5U);
 }
 
-/* proto_reply_bulk(b, p, 3)         -> "$3\r\n<3 bytes>\r\n" */
 int proto_reply_bulk(struct proto_buf *b, const char *data, size_t len)
 {
     char hdr[32];
