@@ -1,7 +1,7 @@
 # minikv architecture
 
 This document records design decisions and *why* they were made. The enforceable
-rules derived from it live in [`AGENTS.md`](../AGENTS.md).
+rules are dervied live from [`AGENTS.md`](../AGENTS.md).
 
 ## Modules and dependencies
 

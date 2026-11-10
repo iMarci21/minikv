@@ -11,6 +11,12 @@ make sanitize         # build/sanitize/minikv (ASan + UBSan)
 make test             # lifecycle + integration tests
 
 build/release/minikv [--port N] [--wal PATH] [--appendfsync always|everysec|no]
+
+Currently supports 'PING' as well as 'ECHO' using the redis-cli:
+redis-cli ping             # -> PONG
+redis-cli ping "hi there"  # -> "hi there"
+redis-cli echo "testing"   # -> "testing"
+redis-benchmark -t ping -n 100000 -P 16 -q # benchmark PING throughput
 ```
 
 Defaults: port `6379`, WAL `minikv.wal`, `appendfsync everysec`. Stop with Ctrl-C or
