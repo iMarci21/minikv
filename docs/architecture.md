@@ -154,7 +154,7 @@ every step also adds something that can be run and tested from the outside.
 | # | Step | Depends on | What works afterwards | Tests added | Status |
 |---|---|---|---|---|---|
 | 1 | `main` skeleton + `log` + `config` | nothing | Process starts, parses args, shuts down cleanly on signals | `lifecycle.sh` (in CI) | done |
-| 2 | `proto`: RESP parser + reply serializer | nothing (pure) | Correct parsing of partial, pipelined and malformed input | Unit tests (small C test runner, no framework), later a fuzz harness | |
+| 2 | `proto`: RESP parser + reply serializer | nothing (pure) | Correct parsing of partial, pipelined and malformed input | Unit tests (small C test runner, no framework), later a fuzz harness | done |
 | 3 | `net` + a tiny `cmd` (`PING`/`ECHO`) | `proto` | `redis-cli ping` → `PONG` | First integration tests: pipelining, split packets, disconnects, connection limits | |
 | 4 | `db` hash table + `cmd` gains `GET`/`SET`/`DEL`/`STRLEN` | `cmd` | In-memory KV store | Hash table unit tests (binary keys, resizing) + integration | |
 | 5 | Incremental rehashing in `db` | `db` | Large datasets resize without pauses | Unit tests (operations correct during a rehash) | |
