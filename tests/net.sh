@@ -15,13 +15,18 @@ FAILED=0
 stop_server() {
     if [[ -n "$SERVER_PID" ]]; then
         kill -TERM "$SERVER_PID" 2>/dev/null || true
-        ( sleep 2; kill -KILL "$SERVER_PID" 2>/dev/null ) &
-        local watchdog=$!
+        for _ in $(seq 1 40); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 0.05
+        done
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill -KILL "$SERVER_PID" 2>/dev/null || true
+        fi
         local code=0
         wait "$SERVER_PID" || code=$?
         SERVER_PID=""
-        kill "$watchdog" 2>/dev/null || true
-        wait "$watchdog" 2>/dev/null || true
         if [[ "$code" -ne 0 ]]; then
             echo "FAIL: server exited with code $code"
             cat "$LOG"

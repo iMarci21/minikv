@@ -59,16 +59,21 @@ start_server() {
 }
 
 # stop_server <signal>: sends the signal and waits up to 2s for the server to exit.
-# Sets EXIT_CODE. If killed its is 137 (128 + SIGKILL).
+# Avoids spawning a subshell watchdog that would inherit trap EXIT and rm -rf $WORKDIR!
 stop_server() {
-    kill "-$1" "$SERVER_PID" 2>/dev/null || true  # may already be dead; wait reports it
-    ( sleep 2; kill -KILL "$SERVER_PID" 2>/dev/null ) &
-    local watchdog=$!
+    kill "-$1" "$SERVER_PID" 2>/dev/null || true
+    for _ in $(seq 1 40); do
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            break
+        fi
+        sleep 0.05
+    done
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -KILL "$SERVER_PID" 2>/dev/null || true
+    fi
     EXIT_CODE=0
     wait "$SERVER_PID" || EXIT_CODE=$?
     SERVER_PID=""
-    kill "$watchdog" 2>/dev/null || true
-    wait "$watchdog" 2>/dev/null || true
 }
 
 # check_clean_exit <description>: checks the result of the last stop_server.
