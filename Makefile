@@ -23,10 +23,12 @@ RELEASE_OBJ := $(SRC:src/%.c=$(RELEASE_DIR)/%.o)
 SANITIZE_OBJ := $(SRC:src/%.c=$(SANITIZE_DIR)/%.o)
 RELEASE_BIN := $(RELEASE_DIR)/minikv
 SANITIZE_BIN := $(SANITIZE_DIR)/minikv
+RELEASE_TEST_PROTO := $(RELEASE_DIR)/test_proto
+SANITIZE_TEST_PROTO := $(SANITIZE_DIR)/test_proto
 
 .PHONY: all release sanitize format format-check clean \
-        test test-lifecycle test-integration \
-        test-sanitize test-lifecycle-sanitize test-integration-sanitize
+        test test-unit test-lifecycle test-integration \
+        test-sanitize test-unit-sanitize test-lifecycle-sanitize test-integration-sanitize
 
 all: release
 
@@ -40,6 +42,11 @@ $(RELEASE_BIN): $(RELEASE_OBJ)
 $(SANITIZE_BIN): $(SANITIZE_OBJ)
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+$(RELEASE_TEST_PROTO): $(RELEASE_DIR)/test_proto.o $(RELEASE_DIR)/proto.o
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(SANITIZE_TEST_PROTO): $(SANITIZE_DIR)/test_proto.o $(SANITIZE_DIR)/proto.o
+	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(RELEASE_DIR)/%.o: src/%.c | $(RELEASE_DIR)
 	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -47,13 +54,22 @@ $(RELEASE_DIR)/%.o: src/%.c | $(RELEASE_DIR)
 $(SANITIZE_DIR)/%.o: src/%.c | $(SANITIZE_DIR)
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) -MMD -MP -c $< -o $@
 
+$(RELEASE_DIR)/test_%.o: tests/test_%.c | $(RELEASE_DIR)
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) -Isrc -MMD -MP -c $< -o $@
+
+$(SANITIZE_DIR)/test_%.o: tests/test_%.c | $(SANITIZE_DIR)
+	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) -Isrc -MMD -MP -c $< -o $@
+
 $(RELEASE_DIR) $(SANITIZE_DIR):
 	mkdir -p $@
 
 SANITIZER_ENV := ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
                  UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
 
-test: test-lifecycle test-integration
+test: test-unit test-lifecycle test-integration
+
+test-unit: $(RELEASE_TEST_PROTO)
+	./$(RELEASE_TEST_PROTO)
 
 test-lifecycle: $(RELEASE_BIN)
 	./tests/lifecycle.sh $(RELEASE_BIN)
@@ -61,7 +77,10 @@ test-lifecycle: $(RELEASE_BIN)
 test-integration: $(RELEASE_BIN)
 	./tests/integration.sh $(RELEASE_BIN)
 
-test-sanitize: test-lifecycle-sanitize test-integration-sanitize
+test-sanitize: test-unit-sanitize test-lifecycle-sanitize test-integration-sanitize
+
+test-unit-sanitize: $(SANITIZE_TEST_PROTO)
+	$(SANITIZER_ENV) ./$(SANITIZE_TEST_PROTO)
 
 test-lifecycle-sanitize: $(SANITIZE_BIN)
 	$(SANITIZER_ENV) ./tests/lifecycle.sh $(SANITIZE_BIN)
@@ -82,4 +101,5 @@ format-check:
 clean:
 	rm -rf build
 
--include $(RELEASE_OBJ:.o=.d) $(SANITIZE_OBJ:.o=.d)
+-include $(RELEASE_OBJ:.o=.d) $(SANITIZE_OBJ:.o=.d) \
+         $(RELEASE_DIR)/test_proto.d $(SANITIZE_DIR)/test_proto.d

@@ -39,6 +39,9 @@ jobs:
       - name: Build
         run: make release
 
+      - name: Unit tests
+        run: make test-unit
+
       - name: Lifecycle tests
         run: make test-lifecycle
 
@@ -49,6 +52,9 @@ jobs:
 
       - name: Build with ASan + UBSan
         run: make sanitize
+
+      - name: Unit tests (sanitized)
+        run: make test-unit-sanitize
 
       - name: Lifecycle tests (sanitized)
         run: make test-lifecycle-sanitize
