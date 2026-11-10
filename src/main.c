@@ -1,5 +1,7 @@
+#include "cmd.h"
 #include "config.h"
 #include "log.h"
+#include "net.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -83,6 +85,9 @@ int main(int argc, char **argv)
     struct config cfg;
     char err[256];
     sigset_t wait_mask;
+    struct cmd *cmd = NULL;
+    struct net *net = NULL;
+    int exit_code = EXIT_FAILURE;
 
     /* 1. Configuration */
     switch (config_parse(argc, argv, &cfg, err, sizeof err)) {
@@ -112,20 +117,36 @@ int main(int argc, char **argv)
      * in exact reverse order below, through a single cleanup path:
      *   3. db_create                         (step 4)
      *   4. wal_open + wal_replay into the db (step 7)
-     *   5. cmd_create                        (step 3)
-     *   6. net_create: bind + listen         (step 3)
      */
 
-    /* 7. Wait for a stop signal. Replaced by net_run() (epoll_pwait) in step 3. */
-    log_info("ready, waiting for SIGINT/SIGTERM");
-    while (!g_stop_signal) {
-        /* Always returns -1/EINTR after a handler ran; the loop condition decides. */
-        (void)sigsuspend(&wait_mask);
+    /* 5. Command dispatcher */
+    cmd = cmd_create();
+    if (cmd == NULL) {
+        log_error("cmd_create: out of memory");
+        goto cleanup;
+    }
+
+    /* 6. Network listener + epoll */
+    net = net_create(cfg.port, cmd);
+    if (net == NULL) {
+        goto cleanup;
+    }
+
+    /* 7. Event loop until a stop signal arrives */
+    log_info("ready, listening on port %u", (unsigned)cfg.port);
+    if (net_run(net, &g_stop_signal, &wait_mask) != 0) {
+        goto cleanup;
     }
     log_info("received %s, shutting down", stop_signal_name(g_stop_signal));
+    exit_code = EXIT_SUCCESS;
 
+cleanup:
     /* 8. Teardown, reverse of startup: net, cmd, wal (flush, join, fsync), db */
+    net_destroy(net);
+    cmd_destroy(cmd);
 
-    log_info("shutdown complete");
-    return EXIT_SUCCESS;
+    if (exit_code == EXIT_SUCCESS) {
+        log_info("shutdown complete");
+    }
+    return exit_code;
 }

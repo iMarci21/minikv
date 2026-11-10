@@ -45,6 +45,9 @@ jobs:
       - name: Lifecycle tests
         run: make test-lifecycle
 
+      - name: Network tests
+        run: make test-net
+
       # Enable Integration tests again if server answers get/set/ping
       - name: Integration tests
         if: false
@@ -58,6 +61,9 @@ jobs:
 
       - name: Lifecycle tests (sanitized)
         run: make test-lifecycle-sanitize
+
+      - name: Network tests (sanitized)
+        run: make test-net-sanitize
 
       - name: Integration tests (sanitized)
         if: false

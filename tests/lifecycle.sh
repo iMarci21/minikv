@@ -4,6 +4,7 @@
 set -euo pipefail
 
 BIN="$(realpath "${1:-build/release/minikv}")"
+PORT="${PORT:-6391}"
 WORKDIR="$(mktemp -d)"
 LOG="$WORKDIR/server.log"
 SERVER_PID=""
@@ -101,8 +102,8 @@ check_cli 2 stderr 6379
 
 # --- Options reach the server ----------------------------------------------------
 
-if start_server --port=6391 --wal custom.wal --appendfsync always; then
-    if grep -q 'port=6391, wal=custom.wal, appendfsync=always' "$LOG"; then
+if start_server --port="$PORT" --wal custom.wal --appendfsync always; then
+    if grep -q "port=$PORT, wal=custom.wal, appendfsync=always" "$LOG"; then
         pass "options are applied (--name=value and --name value)"
     else
         fail "options not applied"; cat "$LOG"
@@ -113,13 +114,13 @@ fi
 # --- Signal handling -----------------------------------------------------------
 
 for sig in TERM INT; do
-    if start_server; then
+    if start_server --port "$PORT"; then
         stop_server "$sig"
         check_clean_exit "SIG$sig -> clean shutdown, exit 0"
     fi
 done
 
-if start_server; then
+if start_server --port "$PORT"; then
     kill -PIPE "$SERVER_PID"
     sleep 0.2
     if kill -0 "$SERVER_PID" 2>/dev/null; then
