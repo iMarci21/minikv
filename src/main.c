@@ -1,5 +1,6 @@
 #include "cmd.h"
 #include "config.h"
+#include "db.h"
 #include "log.h"
 #include "net.h"
 
@@ -85,6 +86,7 @@ int main(int argc, char **argv)
     struct config cfg;
     char err[256];
     sigset_t wait_mask;
+    struct db *db = NULL;
     struct cmd *cmd = NULL;
     struct net *net = NULL;
     int exit_code = EXIT_FAILURE;
@@ -112,15 +114,19 @@ int main(int argc, char **argv)
     log_info("minikv starting (port=%u, wal=%s, appendfsync=%s)", (unsigned)cfg.port, cfg.wal_path,
              config_fsync_name(cfg.fsync));
 
+    /* 3. In-memory database */
+    db = db_create();
+    if (db == NULL) {
+        log_error("db_create: out of memory");
+        goto cleanup;
+    }
+
     /*
-     * Next modules plug in here (roadmap step in parentheses) and are torn down
-     * in exact reverse order below, through a single cleanup path:
-     *   3. db_create                         (step 4)
-     *   4. wal_open + wal_replay into the db (step 7)
+     * 4. wal_open + wal_replay into the db (roadmap step 7)
      */
 
     /* 5. Command dispatcher */
-    cmd = cmd_create();
+    cmd = cmd_create(db);
     if (cmd == NULL) {
         log_error("cmd_create: out of memory");
         goto cleanup;
@@ -144,6 +150,7 @@ cleanup:
     /* 8. Teardown, reverse of startup: net, cmd, wal (flush, join, fsync), db */
     net_destroy(net);
     cmd_destroy(cmd);
+    db_destroy(db);
 
     if (exit_code == EXIT_SUCCESS) {
         log_info("shutdown complete");

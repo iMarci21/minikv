@@ -1,4 +1,5 @@
 #include "cmd.h"
+#include "db.h"
 #include "proto.h"
 
 #include <stdint.h>
@@ -313,12 +314,13 @@ static void run_one_cmd(struct cmd *c, const char *raw, size_t raw_len, struct p
     proto_cmd_reset(&req);
 }
 
-static void test_cmd_ping_and_echo(void)
+static void test_cmd_dispatch(void)
 {
-    struct cmd *c = cmd_create();
+    struct db *d = db_create();
+    struct cmd *c = cmd_create(d);
     struct proto_buf out;
 
-    CHECK(c != NULL);
+    CHECK(d != NULL && c != NULL);
     proto_buf_init(&out);
 
     /* PING (case-insensitive, 0 args) -> +PONG */
@@ -344,13 +346,33 @@ static void test_cmd_ping_and_echo(void)
     run_one_cmd(c, "*1\r\n$4\r\nECHO\r\n", 14U, &out);
     CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
 
+    /* SET / GET / STRLEN / DEL */
+    run_one_cmd(c, "SET foo bar\r\n", 13U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+
+    run_one_cmd(c, "GET foo\r\n", 9U, &out);
+    CHECK(out.len == 9U && memcmp(out.data, "$3\r\nbar\r\n", 9U) == 0);
+
+    run_one_cmd(c, "STRLEN foo\r\n", 12U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":3\r\n", 4U) == 0);
+
+    run_one_cmd(c, "DEL foo missing\r\n", 17U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":1\r\n", 4U) == 0);
+
+    run_one_cmd(c, "GET foo\r\n", 9U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "$-1\r\n", 5U) == 0);
+
+    run_one_cmd(c, "STRLEN foo\r\n", 12U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
+
     /* Unknown command */
     run_one_cmd(c, "*1\r\n$4\r\nNOPE\r\n", 14U, &out);
     CHECK(out.len == 22U && memcmp(out.data, "-ERR unknown command\r\n", 22U) == 0);
 
     proto_buf_destroy(&out);
     cmd_destroy(c);
-    printf("ok:   cmd_exec (PING, ECHO, case-insensitive, arity and unknown command errors)\n");
+    db_destroy(d);
+    printf("ok:   cmd_exec (PING, ECHO, SET, GET, DEL, STRLEN, arity and unknown errors)\n");
 }
 
 int main(void)
@@ -363,7 +385,7 @@ int main(void)
     test_malformed_inputs();
     test_proto_buf();
     test_reply_serializers();
-    test_cmd_ping_and_echo();
+    test_cmd_dispatch();
 
     if (g_failed) {
         fprintf(stderr, "SOME UNIT TESTS FAILED\n");

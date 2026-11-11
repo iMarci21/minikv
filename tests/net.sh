@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end TCP / epoll / RESP tests for net.c + cmd.c (PING, ECHO).
+# End-to-end TCP / epoll / RESP tests for net.c + cmd.c + db.c.
 # Uses Python raw sockets so it works without redis-cli installed locally and
 # can test true single-write pipelining, split packets, and malformed framing.
 # Usage: tests/net.sh [path-to-binary]
@@ -121,7 +121,37 @@ with connect() as s:
     assert recv_exact(s, 11) == b"$5\r\na\x00b\r\n\r\n"
 print("ok:   PING, inline PING/ECHO, case-insensitive ping, PING <arg>, binary ECHO")
 
-# 2. Command errors keep the connection open
+# 2. SET, GET, DEL, STRLEN (empty, binary NUL, and 100 KB values)
+with connect() as s:
+    s.sendall(b"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n")
+    assert recv_exact(s, 5) == b"+OK\r\n"
+
+    s.sendall(b"*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n")
+    assert recv_exact(s, 9) == b"$3\r\nbar\r\n"
+
+    s.sendall(b"*2\r\n$3\r\nDEL\r\n$3\r\nfoo\r\n")
+    assert recv_exact(s, 4) == b":1\r\n"
+
+    s.sendall(b"*2\r\n$3\r\nGET\r\n$3\r\nfoo\r\n")
+    assert recv_exact(s, 5) == b"$-1\r\n"
+
+    # Empty value
+    s.sendall(b"*3\r\n$3\r\nSET\r\n$5\r\nempty\r\n$0\r\n\r\n")
+    assert recv_exact(s, 5) == b"+OK\r\n"
+    s.sendall(b"*2\r\n$3\r\nGET\r\n$5\r\nempty\r\n")
+    assert recv_exact(s, 6) == b"$0\r\n\r\n"
+
+    # 100 KB value + STRLEN
+    big = b"x" * 100000
+    s.sendall(b"*3\r\n$3\r\nSET\r\n$3\r\nbig\r\n$100000\r\n" + big + b"\r\n")
+    assert recv_exact(s, 5) == b"+OK\r\n"
+    s.sendall(b"*2\r\n$6\r\nSTRLEN\r\n$3\r\nbig\r\n")
+    assert recv_exact(s, 9) == b":100000\r\n"
+    s.sendall(b"*2\r\n$3\r\nGET\r\n$3\r\nbig\r\n")
+    assert recv_exact(s, 9 + 100000 + 2) == b"$100000\r\n" + big + b"\r\n"
+print("ok:   SET, GET, DEL, STRLEN (missing, empty, and 100 KB values)")
+
+# 3. Command errors keep the connection open
 with connect() as s:
     s.sendall(b"*1\r\n$7\r\nUNKNOWN\r\n")
     assert recv_line(s).startswith(b"-ERR ")
@@ -129,22 +159,26 @@ with connect() as s:
     s.sendall(b"*1\r\n$4\r\nECHO\r\n")
     assert recv_line(s).startswith(b"-ERR ")
 
+    s.sendall(b"*2\r\n$3\r\nSET\r\n$1\r\na\r\n")
+    assert recv_line(s).startswith(b"-ERR ")
+
     s.sendall(b"*1\r\n$4\r\nPING\r\n")
     assert recv_exact(s, 7) == b"+PONG\r\n"
 print("ok:   unknown command and wrong arity return -ERR without dropping client")
 
-# 3. True pipelining: 3 commands in a single write()
+# 4. True pipelining: SET/GET batch in a single write()
 with connect() as s:
     s.sendall(
-        b"*1\r\n$4\r\nPING\r\n"
-        b"*2\r\n$4\r\nECHO\r\n$3\r\nfoo\r\n"
-        b"*1\r\n$4\r\nPING\r\n"
+        b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"
+        b"*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n2\r\n"
+        b"*2\r\n$3\r\nGET\r\n$1\r\na\r\n"
+        b"*2\r\n$3\r\nGET\r\n$1\r\nb\r\n"
     )
-    want = b"+PONG\r\n$3\r\nfoo\r\n+PONG\r\n"
+    want = b"+OK\r\n+OK\r\n$1\r\n1\r\n$1\r\n2\r\n"
     assert recv_exact(s, len(want)) == want
-print("ok:   pipelining (3 commands in one write)")
+print("ok:   pipelining (SET a 1, SET b 2, GET a, GET b in one write)")
 
-# 4. Split packet across two writes
+# 5. Split packet across two writes
 with connect() as s:
     part1 = b"*2\r\n$4\r\nEC"
     part2 = b"HO\r\n$5\r\nsplit\r\n"
@@ -154,7 +188,7 @@ with connect() as s:
     assert recv_exact(s, 11) == b"$5\r\nsplit\r\n"
 print("ok:   split command across two writes")
 
-# 5. Malformed RESP -> -ERR Protocol error and only that connection closes
+# 6. Malformed RESP -> -ERR Protocol error and only that connection closes
 with connect() as bad, connect() as good:
     bad.sendall(b"*-1\r\n")
     line = recv_line(bad)
@@ -166,8 +200,8 @@ with connect() as bad, connect() as good:
 print("ok:   protocol error sends -ERR, closes bad client, keeps other clients working")
 PYEOF
 
-# 6. Keep an active client connected while SIGTERM shuts the server down
-#    (verifies net_destroy frees open clients cleanly under LSan).
+# 7. Keep an active client connected (and keys stored in db) while SIGTERM shuts
+#    the server down (verifies net_destroy + db_destroy free everything under LSan).
 python3 - "$PORT" <<'PYEOF' &
 import socket, sys, time
 s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=2.0)
@@ -180,7 +214,7 @@ sleep 0.1
 stop_server
 kill "$HOLDER_PID" 2>/dev/null || true
 wait "$HOLDER_PID" 2>/dev/null || true
-echo "ok:   clean shutdown on SIGTERM with an active client connected"
+echo "ok:   clean shutdown on SIGTERM with populated db and active client"
 
 if [[ "$FAILED" -ne 0 ]]; then echo "SOME NET TESTS FAILED"; exit 1; fi
 echo "ALL NET TESTS PASSED"

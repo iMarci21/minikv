@@ -1,23 +1,25 @@
 #ifndef MINIKV_CMD_H
 #define MINIKV_CMD_H
 
+#include "db.h"
 #include "proto.h"
 
 /*
  * Command table and execution dispatch.
  *
- * Validates command names and argument counts, and serializes RESP replies into
- * the caller's output buffer via proto_reply_*. In later steps struct cmd will
- * also hold pointers to struct db and struct wal.
+ * Validates command names and argument counts, mutates or queries struct db,
+ * and serializes RESP replies into the caller's output buffer via proto_reply_*.
+ * In step 7 struct cmd will also hold a pointer to struct wal.
  */
 
 struct cmd;
 
 /*
- * Allocates a command dispatcher context. Caller owns the returned pointer and
- * must free it with cmd_destroy(). Returns NULL on allocation failure.
+ * Allocates a command dispatcher context backed by db (borrowed; must outlive
+ * the returned struct cmd). Caller owns the returned pointer and must free it
+ * with cmd_destroy(). Returns NULL on allocation failure.
  */
-struct cmd *cmd_create(void);
+struct cmd *cmd_create(struct db *db);
 
 /* Frees c. Safe to call with NULL. */
 void cmd_destroy(struct cmd *c);

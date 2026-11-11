@@ -25,6 +25,8 @@ RELEASE_BIN := $(RELEASE_DIR)/minikv
 SANITIZE_BIN := $(SANITIZE_DIR)/minikv
 RELEASE_TEST_PROTO := $(RELEASE_DIR)/test_proto
 SANITIZE_TEST_PROTO := $(SANITIZE_DIR)/test_proto
+RELEASE_TEST_DB := $(RELEASE_DIR)/test_db
+SANITIZE_TEST_DB := $(SANITIZE_DIR)/test_db
 
 .PHONY: all release sanitize format format-check clean \
         test test-unit test-lifecycle test-net test-integration \
@@ -42,10 +44,16 @@ $(RELEASE_BIN): $(RELEASE_OBJ)
 $(SANITIZE_BIN): $(SANITIZE_OBJ)
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(RELEASE_TEST_PROTO): $(RELEASE_DIR)/test_proto.o $(RELEASE_DIR)/proto.o $(RELEASE_DIR)/cmd.o
+$(RELEASE_TEST_PROTO): $(RELEASE_DIR)/test_proto.o $(RELEASE_DIR)/proto.o $(RELEASE_DIR)/cmd.o $(RELEASE_DIR)/db.o
 	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(SANITIZE_TEST_PROTO): $(SANITIZE_DIR)/test_proto.o $(SANITIZE_DIR)/proto.o $(SANITIZE_DIR)/cmd.o
+$(SANITIZE_TEST_PROTO): $(SANITIZE_DIR)/test_proto.o $(SANITIZE_DIR)/proto.o $(SANITIZE_DIR)/cmd.o $(SANITIZE_DIR)/db.o
+	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(RELEASE_TEST_DB): $(RELEASE_DIR)/test_db.o $(RELEASE_DIR)/db.o
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(SANITIZE_TEST_DB): $(SANITIZE_DIR)/test_db.o $(SANITIZE_DIR)/db.o
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(RELEASE_DIR)/%.o: src/%.c | $(RELEASE_DIR)
@@ -68,8 +76,9 @@ SANITIZER_ENV := ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
 
 test: test-unit test-lifecycle test-net test-integration
 
-test-unit: $(RELEASE_TEST_PROTO)
+test-unit: $(RELEASE_TEST_PROTO) $(RELEASE_TEST_DB)
 	./$(RELEASE_TEST_PROTO)
+	./$(RELEASE_TEST_DB)
 
 test-lifecycle: $(RELEASE_BIN)
 	./tests/lifecycle.sh $(RELEASE_BIN)
@@ -82,8 +91,9 @@ test-integration: $(RELEASE_BIN)
 
 test-sanitize: test-unit-sanitize test-lifecycle-sanitize test-net-sanitize test-integration-sanitize
 
-test-unit-sanitize: $(SANITIZE_TEST_PROTO)
+test-unit-sanitize: $(SANITIZE_TEST_PROTO) $(SANITIZE_TEST_DB)
 	$(SANITIZER_ENV) ./$(SANITIZE_TEST_PROTO)
+	$(SANITIZER_ENV) ./$(SANITIZE_TEST_DB)
 
 test-lifecycle-sanitize: $(SANITIZE_BIN)
 	$(SANITIZER_ENV) ./tests/lifecycle.sh $(SANITIZE_BIN)
@@ -108,4 +118,5 @@ clean:
 	rm -rf build
 
 -include $(RELEASE_OBJ:.o=.d) $(SANITIZE_OBJ:.o=.d) \
-         $(RELEASE_DIR)/test_proto.d $(SANITIZE_DIR)/test_proto.d
+         $(RELEASE_DIR)/test_proto.d $(SANITIZE_DIR)/test_proto.d \
+         $(RELEASE_DIR)/test_db.d $(SANITIZE_DIR)/test_db.d
