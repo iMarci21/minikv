@@ -108,8 +108,6 @@ static int client_flush(struct net *n, struct client *c)
 
 /*
  * Sends a fatal protocol error reply best-effort and closes the client.
- * Per AGENTS.md: unrecoverable protocol desync -> send an error and close
- * that connection only.
  */
 static void client_protocol_error(struct net *n, struct client *c, const char *reason)
 {
