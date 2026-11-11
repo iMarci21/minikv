@@ -29,6 +29,9 @@ void db_destroy(struct db *d);
 /* Returns # of keys currently stored. */
 size_t db_size(const struct db *d);
 
+/* Returns 1 if an incremental rehash is currently in progress, 0 otherwise. */
+int db_is_rehashing(const struct db *d);
+
 /*
  * Inserts or overwrites key with val. Both key and val are copied.
  * On allocation failure, the database is left unchanged, -1 is returned.
@@ -40,7 +43,7 @@ int db_set(struct db *d, const char *key, size_t key_len, const char *val, size_
  *   - If found: sets *val_out (borrowed pointer) and *val_len_out, returns 1.
  *   - If not found: returns 0 (*val_out and *val_len_out are untouched).
  */
-int db_get(const struct db *d, const char *key, size_t key_len, const char **val_out,
+int db_get(struct db *d, const char *key, size_t key_len, const char **val_out,
            size_t *val_len_out);
 
 /*
