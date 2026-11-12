@@ -158,7 +158,7 @@ every step also adds something that can be run and tested from the outside.
 | 3 | `net` + a tiny `cmd` (`PING`/`ECHO`) | `proto` | `redis-cli ping` → `PONG` | First integration tests: pipelining, split packets, disconnects, connection limits | done |
 | 4 | `db` hash table + `cmd` gains `GET`/`SET`/`DEL`/`STRLEN` | `cmd` | In-memory KV store | Hash table unit tests (binary keys, resizing) + integration | done |
 | 5 | Incremental rehashing in `db` | `db` | Large datasets resize without pauses | Unit tests (operations correct during a rehash) | done |
-| 6 | Expiry: `EXPIRE`/`TTL`/`SET EX`, absolute deadlines, periodic cleanup | `db`, `net` | Keys expire | Integration | |
+| 6 | Expiry: `EXPIRE`/`TTL`/`SET EX`, absolute deadlines, periodic cleanup | `db`, `net` | Keys expire | Integration | done |
 | 7 | `wal`: record format, replay, fsync policies, fsync thread | `cmd` | Data survives restarts; full integration suite re-enabled in CI | Unit (encoding, corrupt-tail replay) + restart tests | |
 | 8+ | Snapshots / log rewrite, B+ tree | | Long-term goals | | |
 
