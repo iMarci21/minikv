@@ -151,7 +151,28 @@ with connect() as s:
     assert recv_exact(s, 9 + 100000 + 2) == b"$100000\r\n" + big + b"\r\n"
 print("ok:   SET, GET, DEL, STRLEN (missing, empty, and 100 KB values)")
 
-# 3. Command errors keep the connection open
+# 3. Expiry over TCP: SET PX, PTTL, EXPIRE, TTL, PERSIST, and real timer expiration
+with connect() as s:
+    s.sendall(b"SET ephemeral bye PX 150\r\n")
+    assert recv_exact(s, 5) == b"+OK\r\n"
+
+    s.sendall(b"GET ephemeral\r\n")
+    assert recv_exact(s, 9) == b"$3\r\nbye\r\n"
+
+    s.sendall(b"PTTL ephemeral\r\n")
+    pttl_line = recv_line(s)
+    assert pttl_line.startswith(b":") and int(pttl_line[1:-2]) > 0
+
+    time.sleep(0.25)
+
+    s.sendall(b"GET ephemeral\r\n")
+    assert recv_exact(s, 5) == b"$-1\r\n"
+
+    s.sendall(b"PTTL ephemeral\r\n")
+    assert recv_exact(s, 5) == b":-2\r\n"
+print("ok:   SET PX / PTTL / real-time key expiration")
+
+# 4. Command errors keep the connection open
 with connect() as s:
     s.sendall(b"*1\r\n$7\r\nUNKNOWN\r\n")
     assert recv_line(s).startswith(b"-ERR ")
@@ -166,7 +187,7 @@ with connect() as s:
     assert recv_exact(s, 7) == b"+PONG\r\n"
 print("ok:   unknown command and wrong arity return -ERR without dropping client")
 
-# 4. True pipelining: SET/GET batch in a single write()
+# 5. True pipelining: SET/GET batch in a single write()
 with connect() as s:
     s.sendall(
         b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n"
@@ -178,7 +199,7 @@ with connect() as s:
     assert recv_exact(s, len(want)) == want
 print("ok:   pipelining (SET a 1, SET b 2, GET a, GET b in one write)")
 
-# 5. Split packet across two writes
+# 6. Split packet across two writes
 with connect() as s:
     part1 = b"*2\r\n$4\r\nEC"
     part2 = b"HO\r\n$5\r\nsplit\r\n"
@@ -188,7 +209,7 @@ with connect() as s:
     assert recv_exact(s, 11) == b"$5\r\nsplit\r\n"
 print("ok:   split command across two writes")
 
-# 6. Malformed RESP -> -ERR Protocol error and only that connection closes
+# 7. Malformed RESP -> -ERR Protocol error and only that connection closes
 with connect() as bad, connect() as good:
     bad.sendall(b"*-1\r\n")
     line = recv_line(bad)
@@ -200,7 +221,7 @@ with connect() as bad, connect() as good:
 print("ok:   protocol error sends -ERR, closes bad client, keeps other clients working")
 PYEOF
 
-# 7. Keep an active client connected (and keys stored in db) while SIGTERM shuts
+# 8. Keep an active client connected (and keys stored in db) while SIGTERM shuts
 #    the server down (verifies net_destroy + db_destroy free everything under LSan).
 python3 - "$PORT" <<'PYEOF' &
 import socket, sys, time

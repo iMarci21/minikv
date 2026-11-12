@@ -5,10 +5,13 @@
 #include <string.h>
 
 #define DB_INIT_CAP 64U /* must be 2^n */
+#define DB_EXPIRE_BUCKETS_PER_ROUND 20U
+#define DB_EXPIRE_MAX_ROUNDS 4U
 
 struct db_entry {
     struct db_entry *next;
     uint64_t hash;
+    int64_t expire_at_ms;
     size_t key_len;
     size_t val_len;
     char *val;
@@ -23,6 +26,7 @@ struct db {
     size_t old_cap;
     size_t old_used;
     size_t rehash_idx;
+    size_t expire_cursor;
 };
 
 /* 64-bit FNV-1a over raw bytes. */
@@ -46,6 +50,27 @@ static int key_matches(const struct db_entry *e, uint64_t hash, const char *key,
         return 1;
     }
     return memcmp(e->key, key, key_len) == 0;
+}
+
+static int entry_is_expired(const struct db_entry *e, int64_t now_ms)
+{
+    return e->expire_at_ms != DB_NO_EXPIRE && now_ms >= e->expire_at_ms;
+}
+
+static void free_entry(struct db_entry *e)
+{
+    free(e->val);
+    free(e);
+}
+
+static void finish_rehash_if_empty(struct db *d)
+{
+    if (d->old_buckets != NULL && d->old_used == 0) {
+        free(d->old_buckets);
+        d->old_buckets = NULL;
+        d->old_cap = 0;
+        d->rehash_idx = 0;
+    }
 }
 
 /*
@@ -95,11 +120,8 @@ static void db_rehash_step(struct db *d, size_t n)
         while (d->old_buckets[d->rehash_idx] == NULL) {
             d->rehash_idx++;
             if (d->rehash_idx >= d->old_cap) {
-                free(d->old_buckets);
-                d->old_buckets = NULL;
-                d->old_cap = 0;
                 d->old_used = 0;
-                d->rehash_idx = 0;
+                finish_rehash_if_empty(d);
                 return;
             }
             if (--empty_visits == 0) {
@@ -122,12 +144,7 @@ static void db_rehash_step(struct db *d, size_t n)
         n--;
     }
 
-    if (d->old_used == 0) {
-        free(d->old_buckets);
-        d->old_buckets = NULL;
-        d->old_cap = 0;
-        d->rehash_idx = 0;
-    }
+    finish_rehash_if_empty(d);
 }
 
 static struct db_entry *db_find_entry(struct db *d, uint64_t h, const char *key, size_t key_len)
@@ -154,6 +171,58 @@ static struct db_entry *db_find_entry(struct db *d, uint64_t h, const char *key,
     return NULL;
 }
 
+/*
+ * Finds a matching entry across old_buckets and buckets. If the entry is found
+ * but its deadline has passed at now_ms, unlinks and frees it lazily and
+ * returns NULL.
+ */
+static struct db_entry *db_find_live(struct db *d, uint64_t h, const char *key, size_t key_len,
+                                     int64_t now_ms)
+{
+    if (d->old_buckets != NULL) {
+        size_t old_idx = (size_t)(h & (d->old_cap - 1U));
+        struct db_entry **pp = &d->old_buckets[old_idx];
+
+        while (*pp != NULL) {
+            struct db_entry *e = *pp;
+
+            if (key_matches(e, h, key, key_len)) {
+                if (entry_is_expired(e, now_ms)) {
+                    *pp = e->next;
+                    free_entry(e);
+                    d->size--;
+                    d->old_used--;
+                    finish_rehash_if_empty(d);
+                    return NULL;
+                }
+                return e;
+            }
+            pp = &e->next;
+        }
+    }
+
+    {
+        size_t idx = (size_t)(h & (d->cap - 1U));
+        struct db_entry **pp = &d->buckets[idx];
+
+        while (*pp != NULL) {
+            struct db_entry *e = *pp;
+
+            if (key_matches(e, h, key, key_len)) {
+                if (entry_is_expired(e, now_ms)) {
+                    *pp = e->next;
+                    free_entry(e);
+                    d->size--;
+                    return NULL;
+                }
+                return e;
+            }
+            pp = &e->next;
+        }
+    }
+    return NULL;
+}
+
 static void free_bucket_array(struct db_entry **buckets, size_t cap)
 {
     if (buckets == NULL) {
@@ -164,8 +233,7 @@ static void free_bucket_array(struct db_entry **buckets, size_t cap)
 
         while (e != NULL) {
             struct db_entry *next = e->next;
-            free(e->val);
-            free(e);
+            free_entry(e);
             e = next;
         }
     }
@@ -209,12 +277,17 @@ int db_is_rehashing(const struct db *d)
     return d->old_buckets != NULL;
 }
 
-int db_set(struct db *d, const char *key, size_t key_len, const char *val, size_t val_len)
+int db_set(struct db *d, const char *key, size_t key_len, const char *val, size_t val_len,
+           int64_t expire_at_ms)
 {
     uint64_t h = hash_bytes(key, key_len);
     struct db_entry *existing;
     size_t idx;
     char *val_copy = NULL;
+
+    if (key_len > SIZE_MAX - sizeof(struct db_entry)) {
+        return -1;
+    }
 
     /* Alloc new value copy first so incase of OOM never mutates exisitng state */
     if (val_len > 0) {
@@ -234,6 +307,7 @@ int db_set(struct db *d, const char *key, size_t key_len, const char *val, size_
         free(existing->val);
         existing->val = val_copy;
         existing->val_len = val_len;
+        existing->expire_at_ms = expire_at_ms;
         return 0;
     }
 
@@ -243,11 +317,6 @@ int db_set(struct db *d, const char *key, size_t key_len, const char *val, size_
     }
     idx = (size_t)(h & (d->cap - 1U));
 
-    if (key_len > SIZE_MAX - sizeof(struct db_entry)) {
-        free(val_copy);
-        return -1;
-    }
-
     {
         struct db_entry *e = malloc(sizeof *e + key_len);
 
@@ -256,6 +325,7 @@ int db_set(struct db *d, const char *key, size_t key_len, const char *val, size_
             return -1;
         }
         e->hash = h;
+        e->expire_at_ms = expire_at_ms;
         e->key_len = key_len;
         e->val_len = val_len;
         e->val = val_copy;
@@ -269,7 +339,8 @@ int db_set(struct db *d, const char *key, size_t key_len, const char *val, size_
     return 0;
 }
 
-int db_get(struct db *d, const char *key, size_t key_len, const char **val_out, size_t *val_len_out)
+int db_get(struct db *d, const char *key, size_t key_len, int64_t now_ms, const char **val_out,
+           size_t *val_len_out)
 {
     uint64_t h = hash_bytes(key, key_len);
     const struct db_entry *e;
@@ -278,7 +349,7 @@ int db_get(struct db *d, const char *key, size_t key_len, const char **val_out, 
         db_rehash_step(d, 1U);
     }
 
-    e = db_find_entry(d, h, key, key_len);
+    e = db_find_live(d, h, key, key_len, now_ms);
     if (e != NULL) {
         /* Never hand out a NULL pointer when val_len == 0. */
         *val_out = (e->val != NULL) ? e->val : "";
@@ -288,7 +359,7 @@ int db_get(struct db *d, const char *key, size_t key_len, const char **val_out, 
     return 0;
 }
 
-int db_del(struct db *d, const char *key, size_t key_len)
+int db_del(struct db *d, const char *key, size_t key_len, int64_t now_ms)
 {
     uint64_t h = hash_bytes(key, key_len);
 
@@ -304,18 +375,14 @@ int db_del(struct db *d, const char *key, size_t key_len)
             struct db_entry *e = *pp;
 
             if (key_matches(e, h, key, key_len)) {
+                int live = !entry_is_expired(e, now_ms);
+
                 *pp = e->next;
-                free(e->val);
-                free(e);
+                free_entry(e);
                 d->size--;
                 d->old_used--;
-                if (d->old_used == 0) {
-                    free(d->old_buckets);
-                    d->old_buckets = NULL;
-                    d->old_cap = 0;
-                    d->rehash_idx = 0;
-                }
-                return 1;
+                finish_rehash_if_empty(d);
+                return live;
             }
             pp = &e->next;
         }
@@ -329,14 +396,132 @@ int db_del(struct db *d, const char *key, size_t key_len)
             struct db_entry *e = *pp;
 
             if (key_matches(e, h, key, key_len)) {
+                int live = !entry_is_expired(e, now_ms);
+
                 *pp = e->next;
-                free(e->val);
-                free(e);
+                free_entry(e);
                 d->size--;
-                return 1;
+                return live;
             }
             pp = &e->next;
         }
     }
     return 0;
+}
+
+int db_expire_at(struct db *d, const char *key, size_t key_len, int64_t expire_at_ms,
+                 int64_t now_ms)
+{
+    if (expire_at_ms <= now_ms) {
+        return db_del(d, key, key_len, now_ms);
+    }
+
+    {
+        uint64_t h = hash_bytes(key, key_len);
+        struct db_entry *e;
+
+        if (d->old_buckets != NULL) {
+            db_rehash_step(d, 1U);
+        }
+        e = db_find_live(d, h, key, key_len, now_ms);
+        if (e == NULL) {
+            return 0;
+        }
+        e->expire_at_ms = expire_at_ms;
+        return 1;
+    }
+}
+
+int db_persist(struct db *d, const char *key, size_t key_len, int64_t now_ms)
+{
+    uint64_t h = hash_bytes(key, key_len);
+    struct db_entry *e;
+
+    if (d->old_buckets != NULL) {
+        db_rehash_step(d, 1U);
+    }
+    e = db_find_live(d, h, key, key_len, now_ms);
+    if (e == NULL || e->expire_at_ms == DB_NO_EXPIRE) {
+        return 0;
+    }
+    e->expire_at_ms = DB_NO_EXPIRE;
+    return 1;
+}
+
+int64_t db_pttl(struct db *d, const char *key, size_t key_len, int64_t now_ms)
+{
+    uint64_t h = hash_bytes(key, key_len);
+    const struct db_entry *e;
+
+    if (d->old_buckets != NULL) {
+        db_rehash_step(d, 1U);
+    }
+    e = db_find_live(d, h, key, key_len, now_ms);
+    if (e == NULL) {
+        return -2;
+    }
+    if (e->expire_at_ms == DB_NO_EXPIRE) {
+        return -1;
+    }
+    return e->expire_at_ms - now_ms;
+}
+
+static void expire_bucket_chain(struct db *d, struct db_entry **pp, int is_old, int64_t now_ms,
+                                size_t *inspected, size_t *expired)
+{
+    while (*pp != NULL) {
+        struct db_entry *e = *pp;
+
+        (*inspected)++;
+        if (entry_is_expired(e, now_ms)) {
+            *pp = e->next;
+            free_entry(e);
+            d->size--;
+            if (is_old) {
+                d->old_used--;
+            }
+            (*expired)++;
+        } else {
+            pp = &e->next;
+        }
+    }
+}
+
+size_t db_expire_cycle(struct db *d, int64_t now_ms)
+{
+    size_t total_expired = 0;
+
+    if (d->old_buckets != NULL) {
+        db_rehash_step(d, 1U);
+    }
+    if (d->size == 0) {
+        return 0;
+    }
+
+    for (size_t round = 0; round < DB_EXPIRE_MAX_ROUNDS; round++) {
+        size_t inspected = 0;
+        size_t expired = 0;
+        size_t steps = DB_EXPIRE_BUCKETS_PER_ROUND;
+
+        if (steps > d->cap) {
+            steps = d->cap;
+        }
+        for (size_t i = 0; i < steps; i++) {
+            size_t idx = d->expire_cursor & (d->cap - 1U);
+
+            expire_bucket_chain(d, &d->buckets[idx], 0, now_ms, &inspected, &expired);
+            if (d->old_buckets != NULL && idx < d->old_cap) {
+                expire_bucket_chain(d, &d->old_buckets[idx], 1, now_ms, &inspected, &expired);
+            }
+            d->expire_cursor++;
+        }
+        finish_rehash_if_empty(d);
+        total_expired += expired;
+
+        /* Keep sampling only if >25% of inspected entries in this batch were expired. */
+        if (inspected == 0 || expired * 4U <= inspected) {
+            break;
+        }
+    }
+    return total_expired;
 }

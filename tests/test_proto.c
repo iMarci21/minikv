@@ -365,6 +365,58 @@ static void test_cmd_dispatch(void)
     run_one_cmd(c, "STRLEN foo\r\n", 12U, &out);
     CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
 
+    /* Expiry commands: SET EX/PX, SETEX, PSETEX, EXPIRE, PEXPIRE, TTL, PTTL, PERSIST */
+    run_one_cmd(c, "TTL missing\r\n", 13U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, ":-2\r\n", 5U) == 0);
+
+    run_one_cmd(c, "SET k1 v1\r\n", 11U, &out);
+    run_one_cmd(c, "TTL k1\r\n", 8U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, ":-1\r\n", 5U) == 0);
+
+    run_one_cmd(c, "EXPIRE k1 10\r\n", 14U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":1\r\n", 4U) == 0);
+
+    run_one_cmd(c, "TTL k1\r\n", 8U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, ":10\r\n", 5U) == 0);
+
+    run_one_cmd(c, "PERSIST k1\r\n", 12U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":1\r\n", 4U) == 0);
+
+    run_one_cmd(c, "TTL k1\r\n", 8U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, ":-1\r\n", 5U) == 0);
+
+    /* Non-positive EXPIRE deletes key immediately */
+    run_one_cmd(c, "EXPIRE k1 0\r\n", 13U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":1\r\n", 4U) == 0);
+    run_one_cmd(c, "GET k1\r\n", 8U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "$-1\r\n", 5U) == 0);
+
+    /* SET ... EX / PX and SETEX / PSETEX */
+    run_one_cmd(c, "SET k2 v2 EX 20\r\n", 17U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+    run_one_cmd(c, "TTL k2\r\n", 8U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, ":20\r\n", 5U) == 0);
+
+    run_one_cmd(c, "SETEX k3 30 v3\r\n", 16U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+    run_one_cmd(c, "TTL k3\r\n", 8U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, ":30\r\n", 5U) == 0);
+
+    run_one_cmd(c, "PSETEX k4 5000 v4\r\n", 19U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+    run_one_cmd(c, "TTL k4\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":5\r\n", 4U) == 0);
+
+    /* Invalid SET EX/PX syntax and non-positive expire times */
+    run_one_cmd(c, "SET k5 v5 XX 10\r\n", 17U, &out);
+    CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
+
+    run_one_cmd(c, "SET k5 v5 EX 0\r\n", 16U, &out);
+    CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
+
+    run_one_cmd(c, "SET k5 v5 EX notanint\r\n", 23U, &out);
+    CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
+
     /* Unknown command */
     run_one_cmd(c, "*1\r\n$4\r\nNOPE\r\n", 14U, &out);
     CHECK(out.len == 22U && memcmp(out.data, "-ERR unknown command\r\n", 22U) == 0);
@@ -372,7 +424,8 @@ static void test_cmd_dispatch(void)
     proto_buf_destroy(&out);
     cmd_destroy(c);
     db_destroy(d);
-    printf("ok:   cmd_exec (PING, ECHO, SET, GET, DEL, STRLEN, arity and unknown errors)\n");
+    printf(
+        "ok:   cmd_exec (PING, ECHO, SET/EX/PX, SETEX, GET, DEL, STRLEN, EXPIRE, TTL, PERSIST)\n");
 }
 
 int main(void)

@@ -10,10 +10,13 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/timerfd.h>
+#include <time.h>
 #include <unistd.h>
 
 #define NET_EPOLL_BATCH 64
 #define NET_READ_CHUNK 16384U
+#define NET_TICK_NS 100000000L /* 100 ms (10 Hz) periodic maintenance tick */
 
 struct client {
     int fd;
@@ -27,6 +30,7 @@ struct client {
 
 struct net {
     int listen_fd;
+    int timer_fd;
     int epfd;
     struct cmd *cmd;
     struct client *clients[NET_MAX_CLIENTS];
@@ -272,11 +276,29 @@ static void accept_clients(struct net *n)
     }
 }
 
+static void on_timer_tick(struct net *n)
+{
+    for (;;) {
+        uint64_t expirations;
+        ssize_t nr = read(n->timer_fd, &expirations, sizeof expirations);
+
+        if (nr > 0) {
+            continue;
+        }
+        if (nr < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    cmd_tick(n->cmd);
+}
+
 struct net *net_create(uint16_t port, struct cmd *cmd)
 {
     struct net *n;
     int opt = 1;
     struct sockaddr_in addr;
+    struct itimerspec its;
     struct epoll_event ev;
 
     n = calloc(1U, sizeof *n);
@@ -285,6 +307,7 @@ struct net *net_create(uint16_t port, struct cmd *cmd)
         return NULL;
     }
     n->listen_fd = -1;
+    n->timer_fd = -1;
     n->epfd = -1;
     n->cmd = cmd;
 
@@ -318,6 +341,22 @@ struct net *net_create(uint16_t port, struct cmd *cmd)
         return NULL;
     }
 
+    n->timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (n->timer_fd < 0) {
+        log_error("timerfd_create: %s", strerror(errno));
+        net_destroy(n);
+        return NULL;
+    }
+
+    memset(&its, 0, sizeof its);
+    its.it_interval.tv_nsec = NET_TICK_NS;
+    its.it_value.tv_nsec = NET_TICK_NS;
+    if (timerfd_settime(n->timer_fd, 0, &its, NULL) != 0) {
+        log_error("timerfd_settime: %s", strerror(errno));
+        net_destroy(n);
+        return NULL;
+    }
+
     n->epfd = epoll_create1(EPOLL_CLOEXEC);
     if (n->epfd < 0) {
         log_error("epoll_create1: %s", strerror(errno));
@@ -330,6 +369,15 @@ struct net *net_create(uint16_t port, struct cmd *cmd)
     ev.data.ptr = NULL; /* NULL sentinel distinguishes listen_fd from struct client * */
     if (epoll_ctl(n->epfd, EPOLL_CTL_ADD, n->listen_fd, &ev) != 0) {
         log_error("epoll_ctl(ADD listen): %s", strerror(errno));
+        net_destroy(n);
+        return NULL;
+    }
+
+    memset(&ev, 0, sizeof ev);
+    ev.events = EPOLLIN;
+    ev.data.ptr = &n->timer_fd; /* &n->timer_fd sentinel distinguishes the periodic timer */
+    if (epoll_ctl(n->epfd, EPOLL_CTL_ADD, n->timer_fd, &ev) != 0) {
+        log_error("epoll_ctl(ADD timerfd): %s", strerror(errno));
         net_destroy(n);
         return NULL;
     }
@@ -354,12 +402,18 @@ int net_run(struct net *n, const volatile sig_atomic_t *stop_flag, const sigset_
 
         for (int i = 0; i < nev; i++) {
             uint32_t mask = events[i].events;
-            struct client *c = events[i].data.ptr;
+            void *tag = events[i].data.ptr;
+            struct client *c;
 
-            if (c == NULL) {
+            if (tag == NULL) {
                 accept_clients(n);
                 continue;
             }
+            if (tag == &n->timer_fd) {
+                on_timer_tick(n);
+                continue;
+            }
+            c = tag;
 
             if (mask & (EPOLLERR | EPOLLHUP)) {
                 client_close(n, c);
@@ -388,6 +442,7 @@ void net_destroy(struct net *n)
     while (n->num_clients > 0) {
         client_close(n, n->clients[n->num_clients - 1U]);
     }
+    close_fd(n->timer_fd);
     close_fd(n->listen_fd);
     close_fd(n->epfd);
     free(n);

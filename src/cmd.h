@@ -33,4 +33,10 @@ void cmd_destroy(struct cmd *c);
  */
 int cmd_exec(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out);
 
+/*
+ * Periodic timer callback invoked from the event loop. Runs bounded active
+ * expiry (and in step 7, the everysec WAL fsync tick).
+ */
+void cmd_tick(struct cmd *c);
+
 #endif
