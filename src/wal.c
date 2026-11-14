@@ -726,7 +726,9 @@ int wal_flush(struct wal *w)
         int err = errno;
         log_error("wal write failed (%s); truncating back to %lld and entering read-only mode",
                   strerror(err), (long long)w->synced_offset);
-        (void)ftruncate(w->fd, w->synced_offset);
+        if (ftruncate(w->fd, w->synced_offset) != 0) {
+            log_error("wal ftruncate rollback: %s", strerror(errno));
+        }
         (void)lseek(w->fd, w->synced_offset, SEEK_SET);
         w->write_failed = 1;
         return 0;
@@ -791,8 +793,8 @@ void wal_close(struct wal *w)
         if (write_all(w->fd, w->buf, w->buf_len) == 0) {
             w->synced_offset += (off_t)w->buf_len;
             w->buf_len = 0;
-        } else {
-            (void)ftruncate(w->fd, w->synced_offset);
+        } else if (ftruncate(w->fd, w->synced_offset) != 0) {
+            log_error("wal ftruncate rollback on close: %s", strerror(errno));
         }
     }
 
