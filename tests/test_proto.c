@@ -317,7 +317,7 @@ static void run_one_cmd(struct cmd *c, const char *raw, size_t raw_len, struct p
 static void test_cmd_dispatch(void)
 {
     struct db *d = db_create();
-    struct cmd *c = cmd_create(d);
+    struct cmd *c = cmd_create(d, NULL);
     struct proto_buf out;
 
     CHECK(d != NULL && c != NULL);

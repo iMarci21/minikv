@@ -1,6 +1,6 @@
 CC ?= gcc
 
-REQUIRED_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -D_GNU_SOURCE
+REQUIRED_CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -D_GNU_SOURCE -pthread
 CFLAGS ?= -O2 -g
 SANITIZE_FLAGS := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
                   -fno-omit-frame-pointer
@@ -27,6 +27,8 @@ RELEASE_TEST_PROTO := $(RELEASE_DIR)/test_proto
 SANITIZE_TEST_PROTO := $(SANITIZE_DIR)/test_proto
 RELEASE_TEST_DB := $(RELEASE_DIR)/test_db
 SANITIZE_TEST_DB := $(SANITIZE_DIR)/test_db
+RELEASE_TEST_WAL := $(RELEASE_DIR)/test_wal
+SANITIZE_TEST_WAL := $(SANITIZE_DIR)/test_wal
 
 .PHONY: all release sanitize format format-check clean \
         test test-unit test-lifecycle test-net test-integration \
@@ -44,16 +46,22 @@ $(RELEASE_BIN): $(RELEASE_OBJ)
 $(SANITIZE_BIN): $(SANITIZE_OBJ)
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(RELEASE_TEST_PROTO): $(RELEASE_DIR)/test_proto.o $(RELEASE_DIR)/proto.o $(RELEASE_DIR)/cmd.o $(RELEASE_DIR)/db.o
+$(RELEASE_TEST_PROTO): $(RELEASE_DIR)/test_proto.o $(RELEASE_DIR)/proto.o $(RELEASE_DIR)/cmd.o $(RELEASE_DIR)/db.o $(RELEASE_DIR)/wal.o $(RELEASE_DIR)/log.o
 	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(SANITIZE_TEST_PROTO): $(SANITIZE_DIR)/test_proto.o $(SANITIZE_DIR)/proto.o $(SANITIZE_DIR)/cmd.o $(SANITIZE_DIR)/db.o
+$(SANITIZE_TEST_PROTO): $(SANITIZE_DIR)/test_proto.o $(SANITIZE_DIR)/proto.o $(SANITIZE_DIR)/cmd.o $(SANITIZE_DIR)/db.o $(SANITIZE_DIR)/wal.o $(SANITIZE_DIR)/log.o
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(RELEASE_TEST_DB): $(RELEASE_DIR)/test_db.o $(RELEASE_DIR)/db.o
 	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(SANITIZE_TEST_DB): $(SANITIZE_DIR)/test_db.o $(SANITIZE_DIR)/db.o
+	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(RELEASE_TEST_WAL): $(RELEASE_DIR)/test_wal.o $(RELEASE_DIR)/wal.o $(RELEASE_DIR)/cmd.o $(RELEASE_DIR)/db.o $(RELEASE_DIR)/proto.o $(RELEASE_DIR)/log.o
+	$(CC) $(REQUIRED_CFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(SANITIZE_TEST_WAL): $(SANITIZE_DIR)/test_wal.o $(SANITIZE_DIR)/wal.o $(SANITIZE_DIR)/cmd.o $(SANITIZE_DIR)/db.o $(SANITIZE_DIR)/proto.o $(SANITIZE_DIR)/log.o
 	$(CC) $(REQUIRED_CFLAGS) $(SANITIZE_FLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(RELEASE_DIR)/%.o: src/%.c | $(RELEASE_DIR)
@@ -76,9 +84,10 @@ SANITIZER_ENV := ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
 
 test: test-unit test-lifecycle test-net test-integration
 
-test-unit: $(RELEASE_TEST_PROTO) $(RELEASE_TEST_DB)
+test-unit: $(RELEASE_TEST_PROTO) $(RELEASE_TEST_DB) $(RELEASE_TEST_WAL)
 	./$(RELEASE_TEST_PROTO)
 	./$(RELEASE_TEST_DB)
+	./$(RELEASE_TEST_WAL)
 
 test-lifecycle: $(RELEASE_BIN)
 	./tests/lifecycle.sh $(RELEASE_BIN)
@@ -91,9 +100,10 @@ test-integration: $(RELEASE_BIN)
 
 test-sanitize: test-unit-sanitize test-lifecycle-sanitize test-net-sanitize test-integration-sanitize
 
-test-unit-sanitize: $(SANITIZE_TEST_PROTO) $(SANITIZE_TEST_DB)
+test-unit-sanitize: $(SANITIZE_TEST_PROTO) $(SANITIZE_TEST_DB) $(SANITIZE_TEST_WAL)
 	$(SANITIZER_ENV) ./$(SANITIZE_TEST_PROTO)
 	$(SANITIZER_ENV) ./$(SANITIZE_TEST_DB)
+	$(SANITIZER_ENV) ./$(SANITIZE_TEST_WAL)
 
 test-lifecycle-sanitize: $(SANITIZE_BIN)
 	$(SANITIZER_ENV) ./tests/lifecycle.sh $(SANITIZE_BIN)
@@ -119,4 +129,5 @@ clean:
 
 -include $(RELEASE_OBJ:.o=.d) $(SANITIZE_OBJ:.o=.d) \
          $(RELEASE_DIR)/test_proto.d $(SANITIZE_DIR)/test_proto.d \
-         $(RELEASE_DIR)/test_db.d $(SANITIZE_DIR)/test_db.d
+         $(RELEASE_DIR)/test_db.d $(SANITIZE_DIR)/test_db.d \
+         $(RELEASE_DIR)/test_wal.d $(SANITIZE_DIR)/test_wal.d

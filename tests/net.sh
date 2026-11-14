@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# End-to-end TCP / epoll / RESP tests for net.c + cmd.c + db.c.
+# End-to-end TCP / epoll / RESP tests for net.c + cmd.c + db.c + wal.c.
 # Uses Python raw sockets so it works without redis-cli installed locally and
-# can test true single-write pipelining, split packets, and malformed framing.
+# can test true single-write pipelining, split packets, malformed framing, and WAL replay.
 # Usage: tests/net.sh [path-to-binary]
 set -euo pipefail
 
@@ -145,7 +145,7 @@ with connect() as s:
     big = b"x" * 100000
     s.sendall(b"*3\r\n$3\r\nSET\r\n$3\r\nbig\r\n$100000\r\n" + big + b"\r\n")
     assert recv_exact(s, 5) == b"+OK\r\n"
-    s.sendall(b"*2\r\n$6\r\nSTRLEN\r\n$3\r\nbig\r\n")
+    s.sendall(b"*2\r\n$6\r\\nSTRLEN\r\n$3\r\nbig\r\n".replace(b"\\n", b"\n"))
     assert recv_exact(s, 9) == b":100000\r\n"
     s.sendall(b"*2\r\n$3\r\nGET\r\n$3\r\nbig\r\n")
     assert recv_exact(s, 9 + 100000 + 2) == b"$100000\r\n" + big + b"\r\n"
@@ -221,7 +221,27 @@ with connect() as bad, connect() as good:
 print("ok:   protocol error sends -ERR, closes bad client, keeps other clients working")
 PYEOF
 
-# 8. Keep an active client connected (and keys stored in db) while SIGTERM shuts
+# 8. WAL persistence across restart + corrupt tail truncation on startup
+stop_server
+printf '\x99\x88\x77' >>"$WORKDIR/minikv.wal"
+start_server
+
+python3 - "$PORT" <<'PYEOF' || FAILED=1
+import socket, sys
+port = int(sys.argv[1])
+with socket.create_connection(("127.0.0.1", port), timeout=2.0) as s:
+    s.sendall(b"GET a\r\nGET b\r\nSTRLEN big\r\n")
+    buf = bytearray()
+    want = b"$1\r\n1\r\n$1\r\n2\r\n:100000\r\n"
+    while len(buf) < len(want):
+        chunk = s.recv(len(want) - len(buf))
+        assert chunk
+        buf.extend(chunk)
+    assert bytes(buf) == want, f"unexpected replay result: {bytes(buf)!r}"
+print("ok:   WAL persistence and corrupt-tail recovery across restart")
+PYEOF
+
+# 9. Keep an active client connected (and keys stored in db) while SIGTERM shuts
 #    the server down (verifies net_destroy + db_destroy free everything under LSan).
 python3 - "$PORT" <<'PYEOF' &
 import socket, sys, time

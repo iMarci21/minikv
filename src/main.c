@@ -3,6 +3,7 @@
 #include "db.h"
 #include "log.h"
 #include "net.h"
+#include "wal.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -80,6 +81,19 @@ static const char *stop_signal_name(int sig)
     return sig == SIGINT ? "SIGINT" : sig == SIGTERM ? "SIGTERM" : "unknown signal";
 }
 
+static enum wal_fsync to_wal_fsync(enum fsync_policy p)
+{
+    switch (p) {
+    case FSYNC_ALWAYS:
+        return WAL_FSYNC_ALWAYS;
+    case FSYNC_EVERYSEC:
+        return WAL_FSYNC_EVERYSEC;
+    case FSYNC_NO:
+        return WAL_FSYNC_NO;
+    }
+    return WAL_FSYNC_EVERYSEC;
+}
+
 int main(int argc, char **argv)
 {
     const char *progname = "minikv";
@@ -87,6 +101,7 @@ int main(int argc, char **argv)
     char err[256];
     sigset_t wait_mask;
     struct db *db = NULL;
+    struct wal *wal = NULL;
     struct cmd *cmd = NULL;
     struct net *net = NULL;
     int exit_code = EXIT_FAILURE;
@@ -121,12 +136,14 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    /*
-     * 4. wal_open + wal_replay into the db (roadmap step 7)
-     */
+    /* 4. Open WAL and replay existing records into db before binding */
+    wal = wal_open(cfg.wal_path, to_wal_fsync(cfg.fsync), cmd_apply_wal, db);
+    if (wal == NULL) {
+        goto cleanup;
+    }
 
     /* 5. Command dispatcher */
-    cmd = cmd_create(db);
+    cmd = cmd_create(db, wal);
     if (cmd == NULL) {
         log_error("cmd_create: out of memory");
         goto cleanup;
@@ -143,13 +160,16 @@ int main(int argc, char **argv)
     if (net_run(net, &g_stop_signal, &wait_mask) != 0) {
         goto cleanup;
     }
-    log_info("received %s, shutting down", stop_signal_name(g_stop_signal));
+    if (g_stop_signal != 0) {
+        log_info("received %s, shutting down", stop_signal_name(g_stop_signal));
+    }
     exit_code = EXIT_SUCCESS;
 
 cleanup:
     /* 8. Teardown, reverse of startup: net, cmd, wal (flush, join, fsync), db */
     net_destroy(net);
     cmd_destroy(cmd);
+    wal_close(wal);
     db_destroy(db);
 
     if (exit_code == EXIT_SUCCESS) {

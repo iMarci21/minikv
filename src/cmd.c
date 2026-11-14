@@ -7,6 +7,7 @@
 
 struct cmd {
     struct db *db;
+    struct wal *wal;
 };
 
 static int64_t now_realtime_ms(void)
@@ -120,7 +121,7 @@ static int compute_deadline_ms(int64_t now_ms, int64_t amount, int is_seconds,
     return 0;
 }
 
-struct cmd *cmd_create(struct db *db)
+struct cmd *cmd_create(struct db *db, struct wal *wal)
 {
     struct cmd *c = calloc(1U, sizeof *c);
 
@@ -128,6 +129,7 @@ struct cmd *cmd_create(struct db *db)
         return NULL;
     }
     c->db = db;
+    c->wal = wal;
     return c;
 }
 
@@ -136,9 +138,41 @@ void cmd_destroy(struct cmd *c)
     free(c);
 }
 
+int cmd_apply_wal(const struct wal_record *rec, void *ctx)
+{
+    struct db *db = ctx;
+    int64_t now_ms = now_realtime_ms();
+
+    switch (rec->op) {
+    case WAL_OP_SET:
+        if (rec->expire_at_ms != DB_NO_EXPIRE && rec->expire_at_ms <= now_ms) {
+            /* Deadline already passed; remove any prior value for this key and skip. */
+            (void)db_del(db, rec->key, rec->key_len, now_ms);
+            return 0;
+        }
+        return db_set(db, rec->key, rec->key_len, rec->val, rec->val_len, rec->expire_at_ms);
+    case WAL_OP_DEL:
+        (void)db_del(db, rec->key, rec->key_len, now_ms);
+        return 0;
+    case WAL_OP_EXPIRE:
+        (void)db_expire_at(db, rec->key, rec->key_len, rec->expire_at_ms, now_ms);
+        return 0;
+    case WAL_OP_PERSIST:
+        (void)db_persist(db, rec->key, rec->key_len, now_ms);
+        return 0;
+    }
+    return -1;
+}
+
+int cmd_flush(struct cmd *c)
+{
+    return wal_flush(c->wal);
+}
+
 void cmd_tick(struct cmd *c)
 {
     (void)db_expire_cycle(c->db, now_realtime_ms());
+    wal_tick(c->wal);
 }
 
 static int exec_ping(const struct proto_cmd *req, struct proto_buf *out)
@@ -158,6 +192,23 @@ static int exec_echo(const struct proto_cmd *req, struct proto_buf *out)
         return proto_reply_error(out, "ERR wrong number of arguments for 'echo' command");
     }
     return proto_reply_bulk(out, req->argv[1].data, req->argv[1].len);
+}
+
+static int apply_logged_set(struct cmd *c, struct proto_str key, struct proto_str val,
+                            int64_t expire_at_ms, struct proto_buf *out)
+{
+    if (c->wal != NULL) {
+        if (wal_is_readonly(c->wal)) {
+            return proto_reply_error(out, "ERR READONLY WAL write or fsync failed");
+        }
+        if (wal_append_set(c->wal, key.data, key.len, val.data, val.len, expire_at_ms) != 0) {
+            return proto_reply_error(out, "ERR out of memory");
+        }
+    }
+    if (db_set(c->db, key.data, key.len, val.data, val.len, expire_at_ms) != 0) {
+        return proto_reply_error(out, "ERR out of memory");
+    }
+    return proto_reply_simple(out, "OK");
 }
 
 static int exec_set(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
@@ -185,11 +236,7 @@ static int exec_set(struct cmd *c, const struct proto_cmd *req, struct proto_buf
         return proto_reply_error(out, "ERR syntax error");
     }
 
-    if (db_set(c->db, req->argv[1].data, req->argv[1].len, req->argv[2].data, req->argv[2].len,
-               expire_at_ms) != 0) {
-        return proto_reply_error(out, "ERR out of memory");
-    }
-    return proto_reply_simple(out, "OK");
+    return apply_logged_set(c, req->argv[1], req->argv[2], expire_at_ms, out);
 }
 
 static int exec_setex(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out,
@@ -210,11 +257,7 @@ static int exec_setex(struct cmd *c, const struct proto_cmd *req, struct proto_b
         return proto_reply_error(out, is_seconds ? "ERR invalid expire time in 'setex' command"
                                                  : "ERR invalid expire time in 'psetex' command");
     }
-    if (db_set(c->db, req->argv[1].data, req->argv[1].len, req->argv[3].data, req->argv[3].len,
-               expire_at_ms) != 0) {
-        return proto_reply_error(out, "ERR out of memory");
-    }
-    return proto_reply_simple(out, "OK");
+    return apply_logged_set(c, req->argv[1], req->argv[3], expire_at_ms, out);
 }
 
 static int exec_get(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
@@ -239,8 +282,17 @@ static int exec_del(struct cmd *c, const struct proto_cmd *req, struct proto_buf
     if (req->argc < 2U) {
         return proto_reply_error(out, "ERR wrong number of arguments for 'del' command");
     }
+    if (c->wal != NULL && wal_is_readonly(c->wal)) {
+        return proto_reply_error(out, "ERR READONLY WAL write or fsync failed");
+    }
+
     now_ms = now_realtime_ms();
     for (size_t i = 1U; i < req->argc; i++) {
+        if (c->wal != NULL) {
+            if (wal_append_del(c->wal, req->argv[i].data, req->argv[i].len) != 0) {
+                return proto_reply_error(out, "ERR out of memory");
+            }
+        }
         removed += db_del(c->db, req->argv[i].data, req->argv[i].len, now_ms);
     }
     return proto_reply_int(out, removed);
@@ -284,6 +336,14 @@ static int exec_expire(struct cmd *c, const struct proto_cmd *req, struct proto_
                                               : "ERR invalid expire time in 'pexpire' command");
         }
     }
+    if (c->wal != NULL) {
+        if (wal_is_readonly(c->wal)) {
+            return proto_reply_error(out, "ERR READONLY WAL write or fsync failed");
+        }
+        if (wal_append_expire(c->wal, req->argv[1].data, req->argv[1].len, expire_at_ms) != 0) {
+            return proto_reply_error(out, "ERR out of memory");
+        }
+    }
     updated = db_expire_at(c->db, req->argv[1].data, req->argv[1].len, expire_at_ms, now_ms);
     return proto_reply_int(out, updated);
 }
@@ -311,6 +371,14 @@ static int exec_persist(struct cmd *c, const struct proto_cmd *req, struct proto
 
     if (req->argc != 2U) {
         return proto_reply_error(out, "ERR wrong number of arguments for 'persist' command");
+    }
+    if (c->wal != NULL) {
+        if (wal_is_readonly(c->wal)) {
+            return proto_reply_error(out, "ERR READONLY WAL write or fsync failed");
+        }
+        if (wal_append_persist(c->wal, req->argv[1].data, req->argv[1].len) != 0) {
+            return proto_reply_error(out, "ERR out of memory");
+        }
     }
     persisted = db_persist(c->db, req->argv[1].data, req->argv[1].len, now_realtime_ms());
     return proto_reply_int(out, persisted);

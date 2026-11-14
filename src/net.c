@@ -147,6 +147,7 @@ static void client_compact_rbuf(struct client *c)
 
 /*
  * Parses and executes all complete commands currently in c->rbuf.
+ * Replies are queued in c->wbuf and flushed after group-commit wal_flush().
  * Returns 0 to keep the client open, -1 if the client was closed.
  */
 static int client_process_rbuf(struct net *n, struct client *c)
@@ -218,12 +219,7 @@ static void client_on_readable(struct net *n, struct client *c)
         return;
     }
 
-    if (client_process_rbuf(n, c) != 0) {
-        return;
-    }
-    if (c->wpos < c->wbuf.len && client_flush(n, c) != 0) {
-        client_close(n, c);
-    }
+    (void)client_process_rbuf(n, c);
 }
 
 static void accept_clients(struct net *n)
@@ -421,7 +417,6 @@ int net_run(struct net *n, const volatile sig_atomic_t *stop_flag, const sigset_
             }
             if (mask & EPOLLIN) {
                 client_on_readable(n, c);
-                /* client_on_readable may have closed and freed c; skip EPOLLOUT in that turn. */
                 continue;
             }
             if (mask & EPOLLOUT) {
@@ -429,6 +424,25 @@ int net_run(struct net *n, const volatile sig_atomic_t *stop_flag, const sigset_
                     client_close(n, c);
                 }
             }
+        }
+
+        /*
+         * Group commit: flush the WAL buffer once per event-loop batch before
+         * sending any newly queued client replies. If 'always' fsync fails,
+         * refuse to acknowledge the batch and shut down cleanly.
+         */
+        if (cmd_flush(n->cmd) != 0) {
+            return 0;
+        }
+
+        for (size_t idx = 0; idx < n->num_clients;) {
+            struct client *c = n->clients[idx];
+
+            if (c->wpos < c->wbuf.len && client_flush(n, c) != 0) {
+                client_close(n, c);
+                continue;
+            }
+            idx++;
         }
     }
     return 0;
