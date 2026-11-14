@@ -7,7 +7,7 @@ Minimal networked Redis-compatible key-value store written in C11 on Linux.
 ```sh
 make                  # build/release/minikv
 make sanitize         # build/sanitize/minikv (ASan + UBSan)
-make test             # unit + lifecycle + network tests
+make test             # unit + lifecycle + network + integration tests
 
 build/release/minikv [--port N] [--wal PATH] [--appendfsync always|everysec|no]
 
@@ -30,6 +30,12 @@ redis-cli persist session:abc               # -> (integer) 1
 # Throughput benchmarks (pipelined)
 redis-benchmark -t ping -n 100000 -P 16 -q
 redis-benchmark -t set,get -n 200000 -r 100000 -P 16 -q
+
+# Persistence across restarts and durability modes
+build/release/minikv --wal data.wal --apendfsync always
+redis-cli set persistent_key "survives restart"  # -> OK
+# (restart minikv with the same --wal data.wal)
+redis-cli get persistent_key                     # -> "survives restart"
 ```
 
 Defaults: port `6379`, WAL `minikv.wal`, `appendfsync everysec`. Stop with Ctrl-C or
@@ -40,7 +46,7 @@ Progress is tracked in the roadmap in [docs/architecture.md](docs/architecture.m
 Single-threaded `epoll` event loop (`epoll_pwait` with atomic signal unblocking) over non-blocking TCP sockets (`accept4`), per-client dynamic read/write buffers, and a pure zero-I/O RESP2 + inline protocol parser supporting pipelined and split packets.
 
 ## Database
-Binary-safe in-memory key-value store with millisecond-precision key expiration (`CLOCK_REALTIME` absolute deadlines), combining lazy expiration on lookup with bounded active sampling driven by a 10 Hz `CLOCK_MONOTONIC` `timerfd` in `epoll`. Planned: append-only WAL (`always` / `everysec` / `no` fsync policies), log rewrite/snapshots, and a long-term goal of replacing the hash table with a B+ tree.
+Binary-safe in-memory key-value store with millisecond-precision key expiration (`CLOCK_REALTIME` absolute deadlines), combining lazy expiration on lookup with bounded active sampling driven by a 10 Hz `CLOCK_MONOTONIC` `timerfd` in `epoll`. Append-only WAL (`always` / `everysec` / `no` fsync policies), log rewrite/snapshots. Planned: Replace the hash table with a B+ tree.
 
 ## Systems
 Custom 64-bit FNV-1a chained hash table with inline key storage and two-table incremental rehashing (amortizing bucket migration across operations to avoid resize pauses), strict ownership and bounds checking, and zero-leak builds verified under AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer.
