@@ -48,9 +48,7 @@ jobs:
       - name: Network tests
         run: make test-net
 
-      # Enable Integration tests again if server answers get/set/ping
       - name: Integration tests
-        if: false
         run: make test-integration
 
       - name: Build with ASan + UBSan
@@ -66,5 +64,4 @@ jobs:
         run: make test-net-sanitize
 
       - name: Integration tests (sanitized)
-        if: false
         run: make test-integration-sanitize
