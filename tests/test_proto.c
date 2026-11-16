@@ -346,9 +346,18 @@ static void test_cmd_dispatch(void)
     run_one_cmd(c, "*1\r\n$4\r\nECHO\r\n", 14U, &out);
     CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
 
-    /* SET / GET / STRLEN / DEL */
+    /* SET / GET / STRLEN / DBSIZE / DEL */
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
+
+    run_one_cmd(c, "DBSIZE extra\r\n", 14U, &out);
+    CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
+
     run_one_cmd(c, "SET foo bar\r\n", 13U, &out);
     CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":1\r\n", 4U) == 0);
 
     run_one_cmd(c, "GET foo\r\n", 9U, &out);
     CHECK(out.len == 9U && memcmp(out.data, "$3\r\nbar\r\n", 9U) == 0);
@@ -358,6 +367,9 @@ static void test_cmd_dispatch(void)
 
     run_one_cmd(c, "DEL foo missing\r\n", 17U, &out);
     CHECK(out.len == 4U && memcmp(out.data, ":1\r\n", 4U) == 0);
+
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
 
     run_one_cmd(c, "GET foo\r\n", 9U, &out);
     CHECK(out.len == 5U && memcmp(out.data, "$-1\r\n", 5U) == 0);
@@ -424,8 +436,8 @@ static void test_cmd_dispatch(void)
     proto_buf_destroy(&out);
     cmd_destroy(c);
     db_destroy(d);
-    printf(
-        "ok:   cmd_exec (PING, ECHO, SET/EX/PX, SETEX, GET, DEL, STRLEN, EXPIRE, TTL, PERSIST)\n");
+    printf("ok:   cmd_exec (PING, ECHO, SET/EX/PX, SETEX, GET, DEL, STRLEN, DBSIZE, EXPIRE, TTL, "
+           "PERSIST)\n");
 }
 
 int main(void)

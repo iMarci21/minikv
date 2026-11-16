@@ -51,9 +51,12 @@ expect() { # expect <expected-output> <redis-cli args...>
 start_server
 
 expect "PONG" ping
+expect "0"    dbsize
 expect "OK"   set foo bar
+expect "1"    dbsize
 expect "bar"  get foo
 expect "1"    del foo
+expect "0"    dbsize
 expect ""     get foo            # missing key -> nil (prints empty)
 expect "OK"   set empty ""
 expect ""     get empty
