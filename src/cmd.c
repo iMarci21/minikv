@@ -312,6 +312,14 @@ static int exec_strlen(struct cmd *c, const struct proto_cmd *req, struct proto_
     return proto_reply_int(out, (int64_t)val_len);
 }
 
+static int exec_dbsize(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
+{
+    if (req->argc != 1U) {
+        return proto_reply_error(out, "ERR wrong number of arguments for 'dbsize' command");
+    }
+    return proto_reply_int(out, (int64_t)db_size(c->db));
+}
+
 static int exec_expire(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out,
                        int is_seconds)
 {
@@ -412,6 +420,9 @@ int cmd_exec(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
     }
     if (cmd_name_eq(req->argv[0], "STRLEN")) {
         return exec_strlen(c, req, out);
+    }
+    if (cmd_name_eq(req->argv[0], "DBSIZE")) {
+        return exec_dbsize(c, req, out);
     }
     if (cmd_name_eq(req->argv[0], "EXPIRE")) {
         return exec_expire(c, req, out, 1);
