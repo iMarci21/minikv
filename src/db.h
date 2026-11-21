@@ -34,6 +34,12 @@ struct db *db_create(void);
 /* Frees all entries and the db itself. Safe to call with NULL. */
 void db_destroy(struct db *d);
 
+/*
+ * Removes all entries, aborts any active rehash, and resets the database
+ * to its initial empty state. Safe to call with NULL.
+ */
+void db_clear(struct db *d);
+
 /* Returns # of keys currently stored. */
 size_t db_size(const struct db *d);
 

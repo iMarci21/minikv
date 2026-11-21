@@ -258,6 +258,13 @@ static int decode_payload(const uint8_t *payload, size_t len, struct wal_record 
         out->key_len = klen;
         return 0;
     }
+    case WAL_OP_CLEAR: {
+        if (len != 1U) {
+            return -1;
+        }
+        out->op = WAL_OP_CLEAR;
+        return 0;
+    }
     default:
         return -1;
     }
@@ -681,6 +688,28 @@ int wal_append_expire(struct wal *w, const char *key, size_t key_len, int64_t ex
     if (key_len > 0) {
         memcpy(p, key, key_len);
     }
+
+    finalize_record_frame(frame, (uint32_t)payload_len);
+    w->buf_len += WAL_RECORD_HDR_LEN + payload_len;
+    return 0;
+}
+
+int wal_append_clear(struct wal *w)
+{
+    size_t payload_len = 1U;
+    uint8_t *frame;
+    uint8_t *p;
+
+    if (wal_is_readonly(w)) {
+        return -1;
+    }
+    if (buf_reserve(w, WAL_RECORD_HDR_LEN + payload_len) != 0) {
+        return -1;
+    }
+
+    frame = w->buf + w->buf_len;
+    p = frame + WAL_RECORD_HDR_LEN;
+    *p = (uint8_t)WAL_OP_CLEAR;
 
     finalize_record_frame(frame, (uint32_t)payload_len);
     w->buf_len += WAL_RECORD_HDR_LEN + payload_len;

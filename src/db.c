@@ -267,6 +267,42 @@ void db_destroy(struct db *d)
     free(d);
 }
 
+void db_clear(struct db *d)
+{
+    if (d == NULL) {
+        return;
+    }
+    free_bucket_array(d->old_buckets, d->old_cap);
+    d->old_buckets = NULL;
+    d->old_cap = 0;
+    d->old_used = 0;
+    d->rehash_idx = 0;
+
+    for (size_t i = 0; i < d->cap; i++) {
+        struct db_entry *e = d->buckets[i];
+
+        while (e != NULL) {
+            struct db_entry *next = e->next;
+            free_entry(e);
+            e = next;
+        }
+        d->buckets[i] = NULL;
+    }
+
+    if (d->cap > DB_INIT_CAP) {
+        struct db_entry **new_buckets = calloc(DB_INIT_CAP, sizeof *new_buckets);
+
+        if (new_buckets != NULL) {
+            free(d->buckets);
+            d->buckets = new_buckets;
+            d->cap = DB_INIT_CAP;
+        }
+    }
+
+    d->size = 0;
+    d->expire_cursor = 0;
+}
+
 size_t db_size(const struct db *d)
 {
     return d->size;

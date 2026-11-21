@@ -23,6 +23,7 @@ enum wal_op {
     WAL_OP_DEL = 2,
     WAL_OP_EXPIRE = 3,
     WAL_OP_PERSIST = 4,
+    WAL_OP_CLEAR = 5,
 };
 
 struct wal_record {
@@ -81,6 +82,7 @@ int wal_append_set(struct wal *w, const char *key, size_t key_len, const char *v
 int wal_append_del(struct wal *w, const char *key, size_t key_len);
 int wal_append_expire(struct wal *w, const char *key, size_t key_len, int64_t expire_at_ms);
 int wal_append_persist(struct wal *w, const char *key, size_t key_len);
+int wal_append_clear(struct wal *w);
 
 /*
  * Group-commit flush called once per event-loop iteration before client replies
