@@ -74,5 +74,18 @@ stop_server
 start_server
 expect "yes" get persisted
 
+# Clear database & persistence across restart
+expect "OK" flushdb
+expect "0"  dbsize
+expect ""   get persisted
+expect "OK" set after_flush yes
+stop_server
+start_server
+expect "yes" get after_flush
+expect "1"   dbsize
+expect "OK" db_clear
+expect "0"  dbsize
+expect ""   get after_flush
+
 if [[ "$FAILED" -ne 0 ]]; then echo "SOME TESTS FAILED"; exit 1; fi
 echo "ALL TESTS PASSED"

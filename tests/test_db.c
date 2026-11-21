@@ -292,6 +292,56 @@ static void test_resize_many_keys(void)
     printf("ok:   db resize across 2000 keys + delete half\n");
 }
 
+static void test_db_clear(void)
+{
+    struct db *d = db_create();
+    const char *val = NULL;
+    size_t val_len = 0;
+
+    CHECK(d != NULL);
+
+    /* Safe on NULL */
+    db_clear(NULL);
+
+    /* Clear an empty db */
+    db_clear(d);
+    CHECK(db_size(d) == 0);
+
+    /* Populate, then clear */
+    CHECK(db_set(d, "k1", 2, "v1", 2, DB_NO_EXPIRE) == 0);
+    CHECK(db_set(d, "k2", 2, "v2", 2, DB_NO_EXPIRE) == 0);
+    CHECK(db_size(d) == 2);
+    db_clear(d);
+    CHECK(db_size(d) == 0);
+    CHECK(db_get(d, "k1", 2, 0, &val, &val_len) == 0);
+    CHECK(db_get(d, "k2", 2, 0, &val, &val_len) == 0);
+
+    /* Populate beyond DB_INIT_CAP (64) so rehash is triggered */
+    for (int i = 0; i < 100; i++) {
+        char k[32];
+        char v[32];
+        int kl = snprintf(k, sizeof k, "key:%d", i);
+        int vl = snprintf(v, sizeof v, "val:%d", i);
+        CHECK(db_set(d, k, (size_t)kl, v, (size_t)vl, DB_NO_EXPIRE) == 0);
+    }
+    CHECK(db_size(d) == 100);
+    CHECK(db_is_rehashing(d) == 1);
+
+    /* Clear during rehash */
+    db_clear(d);
+    CHECK(db_size(d) == 0);
+    CHECK(db_is_rehashing(d) == 0);
+
+    /* Re-insert after clear */
+    CHECK(db_set(d, "new_key", 7, "new_val", 7, DB_NO_EXPIRE) == 0);
+    CHECK(db_size(d) == 1);
+    CHECK(db_get(d, "new_key", 7, 0, &val, &val_len) == 1);
+    CHECK(val_len == 7 && memcmp(val, "new_val", 7) == 0);
+
+    db_destroy(d);
+    printf("ok:   db clear (empty, populated, mid-rehash, and re-insert)\n");
+}
+
 int main(void)
 {
     test_set_get_overwrite_del();
@@ -299,6 +349,7 @@ int main(void)
     test_incremental_rehash_operations();
     test_expiry_lazy_and_active();
     test_resize_many_keys();
+    test_db_clear();
 
     if (g_failed) {
         fprintf(stderr, "SOME DB UNIT TESTS FAILED\n");

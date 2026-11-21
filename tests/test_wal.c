@@ -115,6 +115,44 @@ static void test_encode_flush_and_replay(void)
     printf("ok:   wal encode, flush, and replay (SET, DEL, EXPIRE, PERSIST, expired skip)\n");
 }
 
+static void test_wal_clear_and_replay(void)
+{
+    char path[128];
+    struct wal *w;
+    struct db *d;
+    const char *val = NULL;
+    size_t val_len = 0;
+
+    make_temp_wal_path(path, sizeof path);
+
+    w = wal_open(path, WAL_FSYNC_ALWAYS, NULL, NULL);
+    CHECK(w != NULL);
+
+    CHECK(wal_append_set(w, "before1", 7U, "v1", 2U, DB_NO_EXPIRE) == 0);
+    CHECK(wal_append_set(w, "before2", 7U, "v2", 2U, DB_NO_EXPIRE) == 0);
+    CHECK(wal_append_clear(w) == 0);
+    CHECK(wal_append_set(w, "after", 5U, "v3", 2U, DB_NO_EXPIRE) == 0);
+
+    CHECK(wal_flush(w) == 0);
+    wal_close(w);
+
+    d = db_create();
+    CHECK(d != NULL);
+    w = wal_open(path, WAL_FSYNC_NO, cmd_apply_wal, d);
+    CHECK(w != NULL);
+
+    CHECK(db_size(d) == 1U);
+    CHECK(db_get(d, "before1", 7U, 0, &val, &val_len) == 0);
+    CHECK(db_get(d, "before2", 7U, 0, &val, &val_len) == 0);
+    CHECK(db_get(d, "after", 5U, 0, &val, &val_len) == 1);
+    CHECK(val_len == 2U && memcmp(val, "v3", 2U) == 0);
+
+    wal_close(w);
+    db_destroy(d);
+    (void)unlink(path);
+    printf("ok:   wal clear and replay\n");
+}
+
 static void test_corrupt_and_truncated_tail_recovery(void)
 {
     char path[128];
@@ -247,6 +285,7 @@ int main(void)
 {
     test_crc32c_vector();
     test_encode_flush_and_replay();
+    test_wal_clear_and_replay();
     test_corrupt_and_truncated_tail_recovery();
     test_invalid_header_and_everysec_thread();
 

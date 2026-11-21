@@ -429,6 +429,35 @@ static void test_cmd_dispatch(void)
     run_one_cmd(c, "SET k5 v5 EX notanint\r\n", 23U, &out);
     CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
 
+    /* FLUSHDB / FLUSHALL / DB_CLEAR */
+    run_one_cmd(c, "FLUSHDB\r\n", 9U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
+
+    run_one_cmd(c, "SET c1 v1\r\n", 11U, &out);
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":1\r\n", 4U) == 0);
+    run_one_cmd(c, "FLUSHDB\r\n", 9U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
+
+    run_one_cmd(c, "SET c2 v2\r\n", 11U, &out);
+    run_one_cmd(c, "FLUSHALL ASYNC\r\n", 16U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
+
+    run_one_cmd(c, "SET c3 v3\r\n", 11U, &out);
+    run_one_cmd(c, "DB_CLEAR\r\n", 10U, &out);
+    CHECK(out.len == 5U && memcmp(out.data, "+OK\r\n", 5U) == 0);
+    run_one_cmd(c, "DBSIZE\r\n", 8U, &out);
+    CHECK(out.len == 4U && memcmp(out.data, ":0\r\n", 4U) == 0);
+
+    run_one_cmd(c, "FLUSHDB BOGUS\r\n", 15U, &out);
+    CHECK(out.len > 5U && memcmp(out.data, "-ERR ", 5U) == 0);
+
     /* Unknown command */
     run_one_cmd(c, "*1\r\n$4\r\nNOPE\r\n", 14U, &out);
     CHECK(out.len == 22U && memcmp(out.data, "-ERR unknown command\r\n", 22U) == 0);
@@ -437,7 +466,7 @@ static void test_cmd_dispatch(void)
     cmd_destroy(c);
     db_destroy(d);
     printf("ok:   cmd_exec (PING, ECHO, SET/EX/PX, SETEX, GET, DEL, STRLEN, DBSIZE, EXPIRE, TTL, "
-           "PERSIST)\n");
+           "PERSIST, FLUSHDB/DB_CLEAR)\n");
 }
 
 int main(void)
