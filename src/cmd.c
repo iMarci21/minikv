@@ -160,6 +160,9 @@ int cmd_apply_wal(const struct wal_record *rec, void *ctx)
     case WAL_OP_PERSIST:
         (void)db_persist(db, rec->key, rec->key_len, now_ms);
         return 0;
+    case WAL_OP_CLEAR:
+        db_clear(db);
+        return 0;
     }
     return -1;
 }
@@ -392,6 +395,33 @@ static int exec_persist(struct cmd *c, const struct proto_cmd *req, struct proto
     return proto_reply_int(out, persisted);
 }
 
+static int exec_flushdb(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
+{
+    if (req->argc > 2U) {
+        if (cmd_name_eq(req->argv[0], "DB_CLEAR")) {
+            return proto_reply_error(out, "ERR wrong number of arguments for 'db_clear' command");
+        }
+        if (cmd_name_eq(req->argv[0], "FLUSHALL")) {
+            return proto_reply_error(out, "ERR wrong number of arguments for 'flushall' command");
+        }
+        return proto_reply_error(out, "ERR wrong number of arguments for 'flushdb' command");
+    }
+    if (req->argc == 2U && !cmd_name_eq(req->argv[1], "ASYNC") &&
+        !cmd_name_eq(req->argv[1], "SYNC")) {
+        return proto_reply_error(out, "ERR syntax error");
+    }
+    if (c->wal != NULL) {
+        if (wal_is_readonly(c->wal)) {
+            return proto_reply_error(out, "ERR READONLY WAL write or fsync failed");
+        }
+        if (wal_append_clear(c->wal) != 0) {
+            return proto_reply_error(out, "ERR out of memory");
+        }
+    }
+    db_clear(c->db);
+    return proto_reply_simple(out, "OK");
+}
+
 int cmd_exec(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
 {
     if (req->argc == 0U) {
@@ -438,6 +468,10 @@ int cmd_exec(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
     }
     if (cmd_name_eq(req->argv[0], "PERSIST")) {
         return exec_persist(c, req, out);
+    }
+    if (cmd_name_eq(req->argv[0], "FLUSHDB") || cmd_name_eq(req->argv[0], "FLUSHALL") ||
+        cmd_name_eq(req->argv[0], "DB_CLEAR")) {
+        return exec_flushdb(c, req, out);
     }
     return proto_reply_error(out, "ERR unknown command");
 }
