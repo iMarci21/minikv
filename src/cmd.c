@@ -301,6 +301,27 @@ static int exec_del(struct cmd *c, const struct proto_cmd *req, struct proto_buf
     return proto_reply_int(out, removed);
 }
 
+static int exec_exists(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
+{
+    int64_t found = 0;
+    int64_t now_ms;
+
+    if (req->argc < 2U) {
+        return proto_reply_error(out, "ERR wrong number of arguments for 'exists' command");
+    }
+
+    now_ms = now_realtime_ms();
+    for (size_t i = 1U; i < req->argc; i++) {
+        const char *val = NULL;
+        size_t val_len = 0;
+
+        if (db_get(c->db, req->argv[i].data, req->argv[i].len, now_ms, &val, &val_len)) {
+            found++;
+        }
+    }
+    return proto_reply_int(out, found);
+}
+
 static int exec_strlen(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
 {
     const char *val = NULL;
@@ -447,6 +468,9 @@ int cmd_exec(struct cmd *c, const struct proto_cmd *req, struct proto_buf *out)
     }
     if (cmd_name_eq(req->argv[0], "DEL")) {
         return exec_del(c, req, out);
+    }
+    if (cmd_name_eq(req->argv[0], "EXISTS")) {
+        return exec_exists(c, req, out);
     }
     if (cmd_name_eq(req->argv[0], "STRLEN")) {
         return exec_strlen(c, req, out);
