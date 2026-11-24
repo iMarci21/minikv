@@ -52,10 +52,14 @@ start_server
 
 expect "PONG" ping
 expect "0"    dbsize
+expect "0"    exists foo
 expect "OK"   set foo bar
+expect "1"    exists foo
+expect "2"    exists foo missing foo
 expect "1"    dbsize
 expect "bar"  get foo
 expect "1"    del foo
+expect "0"    exists foo
 expect "0"    dbsize
 expect ""     get foo            # missing key -> nil (prints empty)
 expect "OK"   set empty ""
@@ -67,6 +71,7 @@ expect "100000" strlen big       # remove if I dont implement STRLEN
 pipelined="$(printf 'SET a 1\r\nSET b 2\r\nGET a\r\nGET b\r\n' | "${CLI[@]}")"
 [[ "$pipelined" == $'OK\nOK\n1\n2' ]] && echo "ok:   pipelining" \
     || { echo "FAIL: pipelining -> '$pipelined'"; FAILED=1; }
+expect "2"    exists a b missing
 
 # Persistence across restart
 expect "OK" set persisted yes
