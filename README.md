@@ -15,14 +15,20 @@ build/release/minikv [--port N] [--wal PATH] [--appendfsync always|everysec|no]
 redis-cli ping                              # -> PONG
 redis-cli echo "testing"                    # -> "testing"
 redis-cli dbsize                            # -> Amount of key/value pairs stored
-redis-cli db_clear                          # -> Deletes all key/value pairs
 
-# Key-value operations
-redis-cli set user:1 "marci"                # -> OK
-redis-cli get user:1                        # -> "marci"
-redis-cli strlen user:1                     # -> (integer) 5
-redis-cli dbsize                            # -> (integer) 1
-redis-cli del user:1                        # -> (integer) 1
+# Basic Key-Value operations
+redis-cli set user1 marci                   # -> OK
+redis-cli get user                          # -> "marci"
+redis-cli strlen user1                      # -> (integer) 5
+redis-cli del user1                         # -> (integer) 1
+
+# Debugging & Information
+redis-cli set key1 value1
+redis-cli set key2 value2
+redis-cli dbsize                            # -> (integer) 2
+redis-cli exists key1                       # -> (integer) 1
+redis-cli exists key1 key2 key3             # -> (integer) 2
+redis-cli db_clear                          # -> Deletes all key/value pairs
 
 # Key expiry (EX / PX / SETEX / PSETEX / EXPIRE / PEXPIRE / TTL / PTTL / PERSIST)
 redis-cli set session:abc "token" EX 10     # -> OK
